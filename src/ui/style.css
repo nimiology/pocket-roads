@@ -61,7 +61,7 @@ body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, sans-serif; color: 
   font: inherit; font-weight: 700; font-size: 14px; padding: 8px 16px; border: none; border-radius: 10px;
   background: #5b5f66; color: #faf7f0; cursor: pointer;
 }
-.game-over button:last-child { background: #e3ddcf; color: #4a4740; }
+.game-over button:not(:first-child) { background: #e3ddcf; color: #4a4740; }
 .game-over button:hover { filter: brightness(1.08); }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
@@ -102,3 +102,38 @@ body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, sans-serif; color: 
 .tutorial .next { background: #faf7f0; color: #4a4740; }
 .tutorial .next[hidden] { display: none; }
 @keyframes pop-in { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+.menu {
+  position: fixed; inset: 0; z-index: 3; display: flex; align-items: center; padding: 0 clamp(16px, 7vw, 90px);
+  background: linear-gradient(90deg, rgba(242, 237, 224, 0.92) 0%, rgba(242, 237, 224, 0.6) 45%, rgba(242, 237, 224, 0) 75%);
+  animation: fade-in 0.4s ease both;
+}
+.menu[hidden] { display: none; }
+.menu .panel { width: min(320px, 100%); animation: rise-in 0.6s cubic-bezier(.2, .8, .2, 1) both; }
+.menu .logo { display: block; width: 64px; height: 64px; margin: 0 0 16px -4px; filter: drop-shadow(0 3px 8px rgba(60, 50, 30, 0.15)); }
+.menu h1 { margin: 0; font-size: clamp(44px, 8vw, 64px); line-height: 0.92; font-weight: 900; letter-spacing: -0.02em; color: #3d3a35; }
+.menu .tag { margin: 12px 0 26px; font-size: 15px; opacity: 0.65; }
+.menu button {
+  font: inherit; font-weight: 700; font-size: 14px; border: none; border-radius: 12px; padding: 10px 14px; cursor: pointer;
+  background: #e3ddcf; color: #4a4740; transition: transform 0.12s ease, filter 0.12s ease;
+}
+.menu button:hover { filter: brightness(1.05); transform: translateY(-1px); }
+.menu button:active { transform: translateY(1px); }
+.menu .primary { width: 100%; font-size: 18px; padding: 14px; background: #3d3a35; color: #faf7f0; }
+.menu .row { display: flex; gap: 8px; margin-top: 8px; }
+.menu .row button { flex: 1; }
+.menu .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; font-size: 13px; }
+.menu .best { font-weight: 800; }
+.menu .sound { background: none; padding: 4px 0; opacity: 0.7; font-size: 13px; }
+@keyframes rise-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+
+.hud .score.bump { animation: bump 0.35s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes bump { 0% { transform: scale(1); } 40% { transform: scale(1.25); } 100% { transform: scale(1); } }
+.hud .score { display: inline-block; transform-origin: left center; }
+.game-over .best-badge { display: inline-block; margin-top: 8px; padding: 3px 10px; border-radius: 8px; background: #f2b230; color: #3d3a35; font-weight: 800; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.game-over .best-badge[hidden] { display: none; }
+.hud-right .mute { width: 32px; height: 32px; border: none; border-radius: 10px; background: rgba(250, 247, 240, 0.92); box-shadow: 0 2px 10px rgba(60, 50, 30, 0.12); cursor: pointer; display: grid; place-items: center; }
+.hud-right .mute svg { width: 16px; height: 16px; }
+
+/* The title screen owns the screen: hide in-game chrome behind it. */
+body.in-menu .hud, body.in-menu .hud-right, body.in-menu .toolbar, body.in-menu .hint, body.in-menu .tutorial { visibility: hidden; }

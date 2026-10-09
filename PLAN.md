@@ -1,4 +1,6 @@
-# Mini Motorways (web clone) — Plan
+# Pocket Roads — Plan
+
+A browser road-drawing city game, inspired by the gameplay of Mini Motorways (not affiliated).
 
 ## Decisions
 | Topic | Choice |

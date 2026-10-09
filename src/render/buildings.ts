@@ -9,6 +9,13 @@ const WALL_H = 0.2;
 const ROOF_H = 0.24;
 const DEST_H = 0.36;
 const PIN_R = 0.08;
+const POP_TIME = 0.5;
+
+/** Overshoots past 1 then settles: a springy pop. */
+function easeOutBack(t: number): number {
+  const c = 1.9;
+  return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2;
+}
 
 // Shared geometry: built once, reused by every building.
 const wallGeo = roundedBox(HOUSE_W, WALL_H, HOUSE_W * 0.86, 0.04).translate(0, WALL_H / 2, 0);
@@ -36,6 +43,9 @@ export class BuildingRenderer {
   private built = 0;
   /** Meshes per house, so a turned house can be rebuilt facing its new way. */
   private houseMeshes = new Map<number, { dir: Dir; meshes: THREE.Mesh[] }>();
+  private pinLayout: { pos: THREE.Vector3; born: number }[] = [];
+  private pinBorn = new Map<number, number[]>();
+  private popping: { meshes: THREE.Mesh[]; scales: THREE.Vector3[]; born: number }[] = [];
   /** Entrance stubs per destination, recoloured when roads reach them. */
   private entranceMeshes = new Map<number, { access: number; mesh: THREE.Mesh }[]>();
   private pins: THREE.InstancedMesh;
@@ -83,6 +93,9 @@ export class BuildingRenderer {
     this.rings.clear();
     this.houseMeshes.clear();
     this.entranceMeshes.clear();
+    this.pinBorn.clear();
+    this.pinLayout = [];
+    this.popping = [];
     this.group.clear();
     this.built = 0;
     this.pins.count = this.pinRims.count = 0;
@@ -132,9 +145,11 @@ export class BuildingRenderer {
     const side = new THREE.Vector3(-h.dir[1], 0, h.dir[0]).multiplyScalar(0.12);
     this.mesh(chimneyGeo, this.chimneyMat, new THREE.Vector3(cx, 0.02 + WALL_H + ROOF_H * 0.62, cz).add(back).add(side), one);
     this.houseMeshes.set(h.id, { dir: h.dir, meshes: this.group.children.slice(first) as THREE.Mesh[] });
+    this.popFrom(first);
   }
 
   private addDest(d: Destination) {
+    const first = this.group.children.length;
     const { building, parking } = destTiles(d.x, d.y, d.side);
     const along = new THREE.Vector3(-d.side[1], 0, d.side[0]); // axis the two halves run along
     const yaw = Math.atan2(-along.z, along.x);
@@ -174,6 +189,7 @@ export class BuildingRenderer {
       stubs.push({ access: e.access, mesh });
     }
     this.entranceMeshes.set(d.id, stubs);
+    this.popFrom(first);
   }
 
   /** Show which lot entrances are connected; call when roads change. */
@@ -184,8 +200,8 @@ export class BuildingRenderer {
   }
 
   private updatePins(dests: Destination[]) {
-    const m = new THREE.Matrix4();
-    let n = 0;
+    const now = performance.now() / 1000;
+    this.pinLayout = [];
     for (const d of dests) {
       const { building } = destTiles(d.x, d.y, d.side);
       const bc = centerOf(building);
@@ -194,21 +210,51 @@ export class BuildingRenderer {
       const perRow = 5;
       const shown = Math.min(d.pins, CAPACITY[d.shape] + CONFIG.maxExtraPins);
       const rows = Math.ceil(shown / perRow);
-      for (let k = 0; k < shown && n < this.pins.instanceMatrix.count; k++) {
+      // Birth times per pin slot, so new pins pop in rather than appear.
+      const born = this.pinBorn.get(d.id) ?? [];
+      while (born.length < shown) born.push(now);
+      born.length = shown;
+      this.pinBorn.set(d.id, born);
+      for (let k = 0; k < shown; k++) {
         const col = k % perRow, row = Math.floor(k / perRow);
         const p = bc.clone()
           .addScaledVector(along, (col - (perRow - 1) / 2) * 0.25)
           .addScaledVector(across, (row - (rows - 1) / 2) * 0.2 + 0.02)
           .setY(DEST_H + 0.02);
-        m.makeTranslation(p.x, p.y, p.z);
-        this.pins.setMatrixAt(n, m);
-        this.pinRims.setMatrixAt(n++, m);
+        this.pinLayout.push({ pos: p, born: born[k] });
       }
+    }
+  }
+
+  /** Per-frame animation: buildings popping in, pins popping in. */
+  animate(): void {
+    const now = performance.now() / 1000;
+    for (let i = this.popping.length - 1; i >= 0; i--) {
+      const pop = this.popping[i];
+      const t = Math.min(1, (now - pop.born) / POP_TIME);
+      const s = Math.max(0.001, easeOutBack(t));
+      pop.meshes.forEach((m, k) => m.scale.copy(pop.scales[k]).multiplyScalar(s));
+      if (t >= 1) this.popping.splice(i, 1);
+    }
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    const n = Math.min(this.pinLayout.length, this.pins.instanceMatrix.count);
+    for (let k = 0; k < n; k++) {
+      const { pos, born } = this.pinLayout[k];
+      m.compose(pos, q, sc.setScalar(Math.max(0.001, easeOutBack(Math.min(1, (now - born) / 0.3)))));
+      this.pins.setMatrixAt(k, m);
+      this.pinRims.setMatrixAt(k, m);
     }
     for (const mesh of [this.pins, this.pinRims]) {
       mesh.count = n;
       mesh.instanceMatrix.needsUpdate = true;
     }
+  }
+
+  /** Start a pop-in for meshes added since group child index `first`. */
+  private popFrom(first: number) {
+    const meshes = this.group.children.slice(first) as THREE.Mesh[];
+    this.popping.push({ meshes, scales: meshes.map((m) => m.scale.clone()), born: performance.now() / 1000 });
+    for (const m of meshes) m.scale.multiplyScalar(0.001);
   }
 
   /** Grow, shrink and pulse the overflow rings; call every frame. */

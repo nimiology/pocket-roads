@@ -17,6 +17,8 @@ export interface RoadToolHooks {
   /** Building's access tile when pressing on a destination, else the tile itself. */
   strokeStart(i: number): number;
   turnHouse(h: House, dir: Dir): boolean;
+  /** Whether `to` is a building that can be entered from road tile `from` (a driveway or lot entrance). */
+  entersBuilding(from: number, to: number): boolean;
 }
 
 /**
@@ -161,6 +163,11 @@ export class RoadTool {
       const nx = cx + sx, ny = cy + sy;
       if (!net.grid.contains(nx, ny)) return;
       const next = net.idx(nx, ny);
+      // Dragging into a building through one of its entrances: the road ends here, connected.
+      if (this.hooks.entersBuilding(this.current, next)) {
+        if (this.startPending && net.placeTile(this.current)) this.startPending = false;
+        return;
+      }
       const placedStart = this.startPending;
       if (placedStart && !net.placeTile(this.current)) return;
       if (!net.connect(this.current, next)) {

@@ -1,6 +1,6 @@
 import { Game } from '../sim/game';
 
-const STORAGE_KEY = 'mm.tutorialDone';
+const STORAGE_KEY = 'pocket-roads.tutorialDone';
 
 interface Step {
   text: string;

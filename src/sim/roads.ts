@@ -120,7 +120,16 @@ export class RoadNetwork {
 
   canPlaceSpecial(i: number, kind: Special): boolean {
     const key = kind === 'roundabout' ? 'roundabouts' : 'lights';
-    return this.hasTile(i) && !this.isSpanTile(i) && !this.specials.has(i) && this.linkCount(i) >= 3 && this.available()[key] > 0;
+    if (!this.hasTile(i) || this.isSpanTile(i) || this.specials.has(i) || this.linkCount(i) < 3 || this.available()[key] <= 0) return false;
+    // Roundabouts need room: on neighbouring tiles their rings would overlap, and the one-tile road
+    // between them is too short for a car to fully leave one before waiting at the next.
+    if (kind === 'roundabout') {
+      const [x, y] = this.xy(i);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if ((dx || dy) && this.grid.contains(x + dx, y + dy) && this.specials.get(this.idx(x + dx, y + dy))?.kind === 'roundabout') return false;
+      }
+    }
+    return true;
   }
 
   placeSpecial(i: number, kind: Special): boolean {

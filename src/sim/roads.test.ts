@@ -116,6 +116,10 @@ describe('RoadNetwork', () => {
     expect(net.placeSpecial(at(1, 2), 'light')).toBe(false); // only two links
     expect(net.placeSpecial(at(2, 2), 'roundabout')).toBe(true);
     expect(net.placeSpecial(at(2, 2), 'light')).toBe(false); // occupied
+    net.inventory.roundabouts = 2;
+    stroke([3, 1], [3, 2]);
+    expect(net.placeSpecial(at(3, 2), 'roundabout')).toBe(false); // right next to another roundabout
+    net.inventory.roundabouts = 1;
     expect(net.available().roundabouts).toBe(0);
     net.closeSpecial(at(2, 2));
     expect(net.specialAt(at(2, 2))).toBeNull();

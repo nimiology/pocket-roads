@@ -12,7 +12,24 @@ const BRIDGE_W = 0.62;
 const PORTAL_OFFSET = 0.25;
 /** Height of a motorway deck, and how far its ramps run from each end. */
 export const DECK_Y = 0.26;
-export const RAMP = 0.9;
+export const RAMP = 1.15;
+
+/** Deck height `t` tiles along a motorway of length `len`: an S-curve up each ramp, so it peels off the road smoothly. */
+export function deckHeight(t: number, len: number): number {
+  const s = Math.max(0, Math.min(1, t / RAMP, (len - t) / RAMP));
+  return DECK_Y * s * s * (3 - 2 * s);
+}
+
+/** How far the deck swings to the side of the a→b line, so each end branches off the road below it. */
+export const DECK_SWING = 0.5;
+/** Sideways offset `t` along a motorway (towards the right of travel from its lower-index end), and its slope. */
+export function deckSwing(t: number, len: number): { off: number; slope: number } {
+  const up = t < len / 2;
+  const u = up ? t / RAMP : (len - t) / RAMP;
+  if (u >= 1) return { off: DECK_SWING, slope: 0 };
+  const s = Math.max(0, u);
+  return { off: DECK_SWING * s * s * (3 - 2 * s), slope: (up ? 1 : -1) * DECK_SWING * 6 * s * (1 - s) / RAMP };
+}
 const DECK_W = 0.44;
 const ROUNDABOUT_R = 0.62;
 const LAMP_OFFSET = 0.4;
@@ -21,12 +38,25 @@ const box = new THREE.BoxGeometry(1, 1, 1);
 const disc = new THREE.CylinderGeometry(0.5, 0.5, 1, 20);
 const arch = new THREE.CylinderGeometry(0.5, 0.5, 1, 16, 1, false, 0, Math.PI);
 
-type Piece = { geo: THREE.BufferGeometry; color: string; shadow?: boolean; matrices: THREE.Matrix4[] };
+type Piece = { geo: THREE.BufferGeometry; color: string; shadow?: boolean; mat?: THREE.Material; matrices: THREE.Matrix4[] };
+
+/** Motorway look: translucent amber glass with a glossy clear coat, gold rails, frosted pillars. */
+const GLASS_DECK = new THREE.MeshPhysicalMaterial({
+  color: '#e9b545', emissive: '#a86a00', emissiveIntensity: 0.12, metalness: 0.1, roughness: 0.45,
+  clearcoat: 0.3, clearcoatRoughness: 0.4, transparent: true, opacity: 0.9, depthWrite: false,
+});
+const GOLD_RAIL = new THREE.MeshStandardMaterial({ color: '#e8c26a', emissive: '#8a5c08', emissiveIntensity: 0.15, metalness: 0.4, roughness: 0.45 });
+const GLASS_PILLAR = new THREE.MeshPhysicalMaterial({
+  color: '#ffe9a8', emissive: '#d99a2b', emissiveIntensity: 0.15, roughness: 0.25, clearcoat: 1,
+  transparent: true, opacity: 0.5, depthWrite: false,
+});
 
 /** Builds road, bridge and tunnel-portal meshes from the road network, plus the hover cursor. */
 export class RoadRenderer {
   readonly group = new THREE.Group();
   private meshes: THREE.InstancedMesh[] = [];
+  /** One-off motorway meshes (curved ramps), which own their geometry. */
+  private ribbons: THREE.Mesh[] = [];
   private hover: THREE.Mesh;
   private preview: THREE.Mesh;
   /** Traffic-light lamps, recoloured each frame: one per road arm, at that arm's stop line. */
@@ -82,12 +112,25 @@ export class RoadRenderer {
     this.hover.position.set(x + 0.5, 0.006, y + 0.5);
   }
 
+  private addRibbon(secs: Section[], right: THREE.Vector3, mat: THREE.Material, shadow: boolean) {
+    const mesh = new THREE.Mesh(ribbonGeometry(secs, right), mat);
+    mesh.castShadow = shadow;
+    mesh.receiveShadow = true;
+    this.group.add(mesh);
+    this.ribbons.push(mesh);
+  }
+
   rebuild(net: RoadNetwork): void {
     for (const m of this.meshes) {
       this.group.remove(m);
       m.dispose();
     }
     this.meshes = [];
+    for (const r of this.ribbons) {
+      this.group.remove(r);
+      r.geometry.dispose();
+    }
+    this.ribbons = [];
 
     const road: Piece = { geo: box, color: PALETTE.road, matrices: [] };
     const joints: Piece = { geo: disc, color: PALETTE.road, matrices: [] };
@@ -96,8 +139,7 @@ export class RoadRenderer {
     const portals: Piece = { geo: arch, color: PALETTE.tunnel, shadow: true, matrices: [] };
     const rounds: Piece = { geo: disc, color: PALETTE.road, matrices: [] };
     const islands: Piece = { geo: disc, color: PALETTE.island, shadow: true, matrices: [] };
-    const decks: Piece = { geo: box, color: PALETTE.motorway, shadow: true, matrices: [] };
-    const pillars: Piece = { geo: box, color: PALETTE.pillar, shadow: true, matrices: [] };
+    const pillars: Piece = { geo: box, color: PALETTE.pillar, mat: GLASS_PILLAR, matrices: [] };
     const stripes: Piece = { geo: box, color: PALETTE.parkingLine, matrices: [] };
     const poles: Piece = { geo: box, color: PALETTE.bridgeRail, matrices: [] };
 
@@ -169,14 +211,40 @@ export class RoadRenderer {
     // Motorways: ramps up from each end, a flat deck, pillars underneath.
     for (const m of net.motorways) {
       if (m.closing) continue;
-      const pa = center(m.a), pb = center(m.b);
+      // Orient from the lower tile index, so the deck swings to the same side cars expect.
+      const [lo, hi] = m.a < m.b ? [m.a, m.b] : [m.b, m.a];
+      const pa = center(lo), pb = center(hi);
       const dir = pb.clone().sub(pa);
       const len = dir.length();
       dir.normalize();
       const ra = pa.clone().addScaledVector(dir, RAMP), rb = pb.clone().addScaledVector(dir, -RAMP);
-      decks.matrices.push(beam(pa.clone().setY(ROAD_Y), ra.clone().setY(DECK_Y), DECK_W, 0.06));
-      decks.matrices.push(beam(ra.clone().setY(DECK_Y), rb.clone().setY(DECK_Y), DECK_W, 0.06));
-      decks.matrices.push(beam(rb.clone().setY(DECK_Y), pb.clone().setY(ROAD_Y), DECK_W, 0.06));
+      const right = new THREE.Vector3(-dir.z, 0, dir.x);
+      // Sample along the length, densely on the ramps. Each end starts as wide as the road and
+      // flush with it, then narrows and rises on an S-curve, like a slip road branching off.
+      const ts: number[] = [];
+      const steps = 14;
+      for (let k = 0; k <= steps; k++) ts.push((k / steps) * RAMP);
+      for (let k = steps; k >= 0; k--) ts.push(len - (k / steps) * RAMP);
+      const ramp = (t: number) => Math.max(0, Math.min(1, t / RAMP, (len - t) / RAMP));
+      const smooth = (s: number) => s * s * (3 - 2 * s);
+      const deckSec: Section[] = [], railSecs: Section[][] = [[], []];
+      for (const t of ts) {
+        const c = pa.clone().addScaledVector(dir, t).addScaledVector(right, deckSwing(t, len).off);
+        const e = smooth(ramp(t));
+        const top = ROAD_Y + 0.004 + (DECK_Y - ROAD_Y) * e;
+        const halfW = (ROAD_W + 0.08) / 2 + (DECK_W - ROAD_W - 0.08) / 2 * e;
+        deckSec.push({ c, top, halfW, bottom: Math.max(ROAD_Y, top - 0.06) });
+        // Rails grow out of the deck edge as it climbs.
+        const railH = 0.045 * smooth(Math.min(1, ramp(t) * 2.5));
+        railSecs.forEach((sec, i) => sec.push({
+          c: c.clone().addScaledVector(right, (i ? 1 : -1) * (halfW - 0.015)),
+          top: top + railH, halfW: 0.015, bottom: top - 0.002,
+        }));
+      }
+      this.addRibbon(deckSec, right, GLASS_DECK, true);
+      for (const sec of railSecs) this.addRibbon(sec, right, GOLD_RAIL, true);
+      ra.addScaledVector(right, DECK_SWING);
+      rb.addScaledVector(right, DECK_SWING);
       stripes.matrices.push(beam(ra.clone().setY(DECK_Y + 0.004), rb.clone().setY(DECK_Y + 0.004), 0.035, 0.004));
       const n = Math.max(1, Math.round((len - 2 * RAMP) / 1.4));
       for (let k = 0; k <= n; k++) {
@@ -187,9 +255,9 @@ export class RoadRenderer {
       }
     }
 
-    for (const piece of [deck, rails, road, joints, portals, rounds, islands, decks, stripes, pillars, poles]) {
+    for (const piece of [deck, rails, road, joints, portals, rounds, islands, pillars, stripes, poles]) {
       if (!piece.matrices.length) continue;
-      const mesh = new THREE.InstancedMesh(piece.geo, new THREE.MeshLambertMaterial({ color: piece.color }), piece.matrices.length);
+      const mesh = new THREE.InstancedMesh(piece.geo, piece.mat ?? new THREE.MeshLambertMaterial({ color: piece.color }), piece.matrices.length);
       piece.matrices.forEach((m, k) => mesh.setMatrixAt(k, m));
       mesh.receiveShadow = true;
       mesh.castShadow = !!piece.shadow;
@@ -197,6 +265,37 @@ export class RoadRenderer {
       this.meshes.push(mesh);
     }
   }
+}
+
+type Section = { c: THREE.Vector3; top: number; bottom: number; halfW: number };
+
+/** A solid strip through cross-sections (top, sides, underside), each a smooth-shaded face. */
+function ribbonGeometry(secs: Section[], right: THREE.Vector3): THREE.BufferGeometry {
+  const pos: number[] = [], idx: number[] = [];
+  const corner = (s: Section, side: number, y: number) => {
+    const p = s.c.clone().addScaledVector(right, side * s.halfW);
+    return [p.x, y, p.z];
+  };
+  // Each face is its own strip of vertex pairs so edges stay crisp. Winding faces outward.
+  const faces: [(s: Section) => number[], (s: Section) => number[]][] = [
+    [(s) => corner(s, 1, s.top), (s) => corner(s, -1, s.top)],
+    [(s) => corner(s, -1, s.top), (s) => corner(s, -1, s.bottom)],
+    [(s) => corner(s, 1, s.bottom), (s) => corner(s, 1, s.top)],
+    [(s) => corner(s, -1, s.bottom), (s) => corner(s, 1, s.bottom)],
+  ];
+  for (const [l, r] of faces) {
+    const base = pos.length / 3;
+    for (const s of secs) pos.push(...l(s), ...r(s));
+    for (let k = 0; k + 1 < secs.length; k++) {
+      const a = base + 2 * k;
+      idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
 }
 
 /** A box from a to b (which may differ in height), `width` wide and `h` thick. */

@@ -11,9 +11,58 @@ const REQUEST_DIST = 0.1;
 /** After a car with another movement has waited this long, no more cars may tag along. */
 const PLATOON_PATIENCE = 1;
 /** Speed multiplier on motorway lanes. */
-export const MOTORWAY_SPEED = 1.8;
-/** Cars allowed inside a roundabout at once, any direction. */
+export const MOTORWAY_SPEED = 2.2;
+/** Cars allowed inside a roundabout at once (only if their stretches of ring don't overlap). */
 export const ROUNDABOUT_CAP = 3;
+/** Sideways offset of a car from the road centreline (right-hand traffic); shared with rendering. */
+export const LANE_OFFSET = 0.13;
+/** Distance from a roundabout's centre where cars wait, then leave the lane to merge onto the ring. */
+export const RING_ENTRY = 0.64;
+/** Radius cars circulate at, around the island. */
+export const RING_R = 0.4;
+/** How far round from its arm a car joins (and leaves) the ring, in radians. */
+export const RING_MERGE = 0.75;
+/** Extra angle kept clear around each car's stretch of ring (a car is ~1 rad long on this ring). */
+const RING_GAP = 0.6;
+
+/**
+ * The stretch of ring a car drives through roundabout b from arm a to arm c: it starts at angle
+ * `from` and sweeps `sweep` radians anticlockwise as seen from above (right-hand traffic).
+ * Angles are atan2(z, x) with z pointing down the screen, so anticlockwise means decreasing.
+ */
+export function ringArc(a: number, b: number, c: number, w: number): { from: number; sweep: number } {
+  const ang = (n: number) => Math.atan2(Math.floor(n / w) - Math.floor(b / w), (n % w) - (b % w));
+  // How far round (anticlockwise) the exit arm is from the entry arm; a U-turn goes all the way.
+  let turn = ang(a) - ang(c);
+  while (turn <= 1e-6) turn += Math.PI * 2;
+  while (turn > Math.PI * 2 + 1e-6) turn -= Math.PI * 2;
+  // Join and leave the ring a little way from each arm, but never so far that a tight right turn
+  // has its join point past its leave point (which would send it round a full lap).
+  const merge = Math.min(RING_MERGE, turn / 2 - 0.12);
+  return { from: ang(a) - merge, sweep: turn - 2 * merge };
+}
+
+/** Roundabouts: cars queue this far back from the centre, clear of cars swinging out of the ring. */
+const RING_WAIT = 0.82;
+
+/** Where cars wait before a junction, measured back from its centre. */
+function stopDist(isRoundabout: boolean): number {
+  return isRoundabout ? RING_WAIT : STOP;
+}
+
+/** How far past a junction's centre a car must get before it no longer holds the junction. */
+function clearDist(isRoundabout: boolean): number {
+  return isRoundabout ? RING_ENTRY : STOP;
+}
+
+/** Whether two ring stretches (plus clearance) overlap anywhere on the circle. */
+function arcsOverlap(p: { from: number; sweep: number }, q: { from: number; sweep: number }): boolean {
+  // Sample one arc finely and test each point against the other, both padded by RING_GAP / 2.
+  const norm = (x: number) => ((x % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const inside = (x: number, r: { from: number; sweep: number }) => norm(r.from + RING_GAP / 2 - x) <= r.sweep + RING_GAP;
+  for (let k = 0; k <= 24; k++) if (inside(p.from + RING_GAP / 2 - (p.sweep + RING_GAP) * (k / 24), q)) return true;
+  return false;
+}
 /** Traffic-light timing (seconds): shortest green, longest green while the other axis waits, all-red gap. */
 export const LIGHT_MIN_GREEN = 1.5;
 export const LIGHT_MAX_GREEN = 7;
@@ -63,6 +112,8 @@ interface Lock {
   movement: string;
   /** When a car with a different movement first got turned away, or Infinity. */
   contestedSince: number;
+  /** Roundabouts: the stretch of ring each car inside is driving, and the arms it enters and leaves by. */
+  arcs?: Map<Car, { from: number; sweep: number; in: number; out: number }>;
 }
 
 export interface TrafficHooks {
@@ -180,6 +231,21 @@ export class Traffic {
     }
   }
 
+  /** Speed factor for a car on (or just entering/leaving) a roundabout's ring, else 1. */
+  private ringFactor(car: Car, len: number): number {
+    const { path, seg, t } = car;
+    let arc: { sweep: number } | null = null;
+    if (seg + 2 < path.length && t > len - RING_ENTRY && this.specialAt(path[seg + 1]) === 'roundabout') {
+      arc = ringArc(path[seg], path[seg + 1], path[seg + 2], this.gridW);
+    } else if (seg > 0 && t < RING_ENTRY && this.specialAt(path[seg]) === 'roundabout') {
+      arc = ringArc(path[seg - 1], path[seg], path[seg + 1], this.gridW);
+    }
+    if (!arc) return 1;
+    // Drawn route ≈ merge curve in + arc + merge curve out; the path it maps onto is 2 × RING_ENTRY.
+    const drawn = 0.7 + arc.sweep * RING_R;
+    return Math.min(1, (2 * RING_ENTRY) / drawn) * 0.8;
+  }
+
   /** True when the lane a→b has space for a car entering at its start. */
   laneHasRoom(a: number, b: number, except?: Car): boolean {
     return this.carsOn(a, b).every((c) => c === except || c.t >= MIN_GAP);
@@ -190,7 +256,8 @@ export class Traffic {
    * `ahead` other cars already crossing toward that lane.
    */
   private canClearJunction(b: number, c: number, ahead: number): boolean {
-    const need = STOP + MIN_GAP * (ahead + 1);
+    // Past a roundabout the exit lane must have room beyond the ring's edge.
+    const need = this.specialAt(b) === 'roundabout' ? RING_ENTRY + MIN_GAP * 0.5 : STOP + MIN_GAP * (ahead + 1);
     return this.carsOn(b, c).every((o) => o.t >= need - 1e-9);
   }
 
@@ -218,16 +285,18 @@ export class Traffic {
 
     if (last) {
       allowed = Math.min(allowed, len - car.t);
-    } else if (car.t <= len - STOP + 1e-9) {
+    } else if (car.t <= len - stopDist(this.specialAt(b) === 'roundabout') + 1e-9) {
       // Before the stop line: may we continue through node b?
-      const toStop = len - STOP - car.t;
+      const toStop = len - stopDist(this.specialAt(b) === 'roundabout') - car.t;
       if (!(toStop <= REQUEST_DIST && this.clearToPass(car, now))) {
         allowed = Math.min(allowed, toStop);
         if (toStop < 0.05 && car.waitingSince === Infinity) car.waitingSince = now;
       }
     }
 
-    const top = this.speed * (len > 1.5 ? MOTORWAY_SPEED : 1);
+    // Faster on motorways. On a roundabout the drawn ring is longer than the 2 × RING_ZONE of path
+    // it maps onto, so slow down in proportion and every car circulates at the same visible speed.
+    const top = this.speed * (len > 1.5 ? MOTORWAY_SPEED : 1) * this.ringFactor(car, len);
     car.speed = Math.min(top, car.speed + ACCEL * dt);
     const move = Math.max(0, Math.min(car.speed * dt, allowed));
     if (move < car.speed * dt) car.speed = move / dt;
@@ -265,8 +334,17 @@ export class Traffic {
       this.locks.set(b, lock);
       const special = this.specialAt(b);
       if (special === 'roundabout') {
-        // Yield to cars already circulating, but let several share it whatever their direction.
+        // Yield to cars already circulating: enter only if our stretch of ring is clear of theirs.
         if (lock.holders.size >= ROUNDABOUT_CAP) return false;
+        const arc = { ...ringArc(a, b, c, this.gridW), in: a, out: c };
+        lock.arcs ??= new Map();
+        for (const [other, oa] of lock.arcs) {
+          if (!lock.holders.has(other)) continue;
+          // Overlapping stretch of ring, or entering by an arm someone is leaving by (and vice versa):
+          // the two merge curves sit side by side on that arm and would clip.
+          if (arcsOverlap(arc, oa) || oa.out === a || oa.in === c) return false;
+        }
+        lock.arcs.set(car, arc);
         return this.grant(car, b, lock, intoParking);
       }
       if (special === 'light') {
@@ -313,7 +391,7 @@ export class Traffic {
   private releasePassed(car: Car) {
     for (const node of car.locks) {
       const stillNear =
-        (car.path[car.seg + 1] === node) || (car.path[car.seg] === node && car.t < STOP);
+        (car.path[car.seg + 1] === node) || (car.path[car.seg] === node && car.t < clearDist(this.specialAt(node) === 'roundabout'));
       if (!stillNear) this.release(car, node);
     }
   }
@@ -323,6 +401,7 @@ export class Traffic {
     const lock = this.locks.get(node);
     if (!lock) return;
     lock.holders.delete(car);
+    lock.arcs?.delete(car);
     if (lock.holders.size === 0) this.locks.delete(node);
   }
 

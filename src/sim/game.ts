@@ -38,6 +38,13 @@ export const CONFIG = {
   growEveryWeeks: 2,
 };
 
+/** Things that happened during a step, for sound and animation; drained by the UI each frame. */
+export type GameEvent =
+  | { type: 'deliver'; dest: Destination }
+  | { type: 'spawn'; building: House | Destination }
+  | { type: 'week' }
+  | { type: 'gameOver' };
+
 /** One upgrade choice: some road tiles plus at most one special tool. */
 export type Upgrade = Partial<Inventory>;
 
@@ -69,6 +76,7 @@ export class Game {
   week = 0;
   /** Choices waiting for the player at week's end; the sim holds still until one is picked. */
   upgrades: Upgrade[] | null = null;
+  readonly events: GameEvent[] = [];
   private rng: Rng;
   private nextCarId = 0;
   private houseTimer = 0;
@@ -141,6 +149,7 @@ export class Game {
     const picks: Upgrade[] = [];
     while (picks.length < 2 && pool.length) picks.push(pool.splice(Math.floor(this.rng() * pool.length), 1)[0]);
     this.upgrades = picks;
+    this.events.push({ type: 'week' });
   }
 
   /** Take one of the offered upgrades and resume the clock. */
@@ -223,7 +232,9 @@ export class Game {
         return this.buildings.isAccessOk(ax, ay, this.bounds);
       });
       if (!dir) continue;
-      return this.buildings.addHouse(x, y, dir, color, this.time);
+      const h = this.buildings.addHouse(x, y, dir, color, this.time);
+      this.events.push({ type: 'spawn', building: h });
+      return h;
     }
     return null;
   }
@@ -250,7 +261,9 @@ export class Game {
       });
       if (!side) continue;
       const shape = this.rng() < 0.5 ? 'circle' : 'square';
-      return this.buildings.addDest(x, y, side, color, shape, this.time, (ax, ay) => this.buildings.isAccessOk(ax, ay, b));
+      const d = this.buildings.addDest(x, y, side, color, shape, this.time, (ax, ay) => this.buildings.isAccessOk(ax, ay, b));
+      this.events.push({ type: 'spawn', building: d });
+      return d;
     }
     return null;
   }
@@ -297,7 +310,10 @@ export class Game {
       if (d.pins > CAPACITY[d.shape]) {
         const rate = d.assigned > 0 ? CONFIG.overflowSlowdown : 1;
         d.overflow = Math.min(1, d.overflow + (dt * rate) / CONFIG.overflowSeconds);
-        if (d.overflow >= 1 && !this.over && !this.sandbox) this.over = { dest: d, time: this.time };
+        if (d.overflow >= 1 && !this.over && !this.sandbox) {
+          this.over = { dest: d, time: this.time };
+          this.events.push({ type: 'gameOver' });
+        }
       } else if (d.overflow > 0) {
         d.overflow = Math.max(0, d.overflow - dt / CONFIG.overflowRecover);
       }
@@ -378,6 +394,7 @@ export class Game {
     if (d.pins > 0) {
       d.pins--;
       this.score++;
+      this.events.push({ type: 'deliver', dest: d });
     }
     d.assigned--;
     this.buildings.version++;

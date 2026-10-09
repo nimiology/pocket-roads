@@ -2,7 +2,7 @@ import { Buildings } from './buildings';
 import { Motorway, RoadNetwork } from './roads';
 
 /** Route-planning cost per tile of motorway, relative to a normal road. */
-export const MOTORWAY_COST = 0.55;
+export const MOTORWAY_COST = 0.35;
 
 /**
  * Driving graph: road edges plus driveways joining each building's endpoint

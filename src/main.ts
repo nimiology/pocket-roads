@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CameraControls } from './input/cameraControls';
+import { Sound } from './audio/sound';import { CameraControls } from './input/cameraControls';
 import { RoadTool } from './input/roadTool';
 import { BuildingRenderer } from './render/buildings';
 import { CarRenderer } from './render/cars';
@@ -9,6 +9,7 @@ import { CONFIG, Game } from './sim/game';
 import { generateMap } from './sim/mapgen';
 import { GameOverScreen } from './ui/gameOver';
 import { Hud } from './ui/hud';
+import { Menu, highScore } from './ui/menu';
 import { UpgradePicker } from './ui/upgradePicker';
 import { Toolbar } from './ui/toolbar';
 import { Tutorial } from './ui/tutorial';
@@ -23,11 +24,37 @@ const buildingRenderer = new BuildingRenderer(renderer.scene);
 let entrancesKey = '';
 const carRenderer = new CarRenderer(renderer.scene);
 const toolbar = new Toolbar(document.body);
-const gameOver = new GameOverScreen(document.body, () => newGame(seed), () => newGame(Math.floor(Math.random() * 1e6)));
+const sound = new Sound();
+const randomSeed = () => Math.floor(Math.random() * 1e6);
+const gameOver = new GameOverScreen(document.body, () => newGame(seed), () => newGame(randomSeed()), () => {
+  newGame(randomSeed());
+  menu.show();
+});
 
-const hud = new Hud(document.body, (s) => setSpeed(s));
+const hud = new Hud(document.body, (s) => setSpeed(s), () => toggleSound(), sound.muted);
 const tutorial = new Tutorial(document.body);
 const picker = new UpgradePicker(document.body, (i) => game.chooseUpgrade(i));
+function toggleSound(): boolean {
+  sound.setMuted(!sound.muted);
+  hud.setMuted(sound.muted);
+  return sound.muted;
+}
+function startPlaying(forceTutorial = false) {
+  menu.hide();
+  paused = false;
+  renderer.setBounds(game.bounds);
+  tutorial.start(forceTutorial);
+}
+const menu = new Menu(document.body, {
+  play: () => startPlaying(),
+  newCity: () => newGame(randomSeed()),
+  tutorial: () => startPlaying(true),
+  toggleSound,
+}, sound.muted);
+// Every button gives a soft click.
+document.addEventListener('click', (e) => {
+  if ((e.target as HTMLElement).closest('button, .tool.pickable')) sound.click();
+});
 const hint = document.createElement('div');
 hint.className = 'hint';
 hint.textContent =
@@ -44,6 +71,8 @@ let drawnBuildings = -1;
 let shownOver = false;
 let shownStage = 0;
 let drawnTrees = '';
+/** Road tiles and tools placed, to click when the player builds or erases. */
+let builtCount = -1;
 /** Tools the player has been told about, so each tip shows once per game. */
 let toldTools = new Set<string>();
 const TOOL_TIPS: Record<string, string> = {
@@ -59,6 +88,7 @@ function newGame(newSeed: number) {
   shownOver = false;
   shownStage = 0;
   drawnTrees = '';
+  builtCount = -1;
   toldTools = new Set();
   gameOver.hide();
   picker.hide();
@@ -68,6 +98,8 @@ function newGame(newSeed: number) {
   renderer.resize();
   renderer.setBounds(game.bounds, true);
   history.replaceState(null, '', `?seed=${seed}`);
+  game.events.length = 0;
+  menu.refresh();
 }
 
 function setSpeed(s: number) {
@@ -97,9 +129,17 @@ new RoadTool(renderer, roadRenderer, () => game.net, () => camera.isPanning, {
   },
   strokeStart: (i) => game.buildings.at(i)?.access ?? i,
   turnHouse: (h, dir) => game.turnHouse(h, dir),
+  entersBuilding: (from, to) => {
+    const b = game.buildings.at(to);
+    return !!b && game.buildings.accesses(b).includes(from);
+  },
 });
 
 window.addEventListener('keydown', (e) => {
+  if (menu.visible) {
+    if (e.key === 'Enter') startPlaying();
+    return;
+  }
   if (e.key === 'r') newGame(Math.floor(Math.random() * 1e6));
   if (e.key === 'g') game.grow();
   if (e.key === 'f') renderer.setBounds(game.bounds);
@@ -126,13 +166,13 @@ window.addEventListener('resize', () => {
 });
 
 newGame(seed);
-tutorial.start();
 
 if (import.meta.env.DEV) {
   // Debug handle for poking at the game from the browser console.
   Object.assign(window, {
     __game: {
       renderer,
+      sound,
       get game() { return game; },
       get net() { return game.net; },
       get map() { return game.map; },
@@ -150,7 +190,15 @@ let acc = 0;
 renderer.renderer.setAnimationLoop((now) => {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  if (!paused) {
+  if (menu.visible) {
+    // Slow drift over the city behind the title screen.
+    const b = game.bounds, t = now / 1000;
+    Object.assign(renderer.viewTarget, {
+      x: (b.x0 + b.x1) / 2 + Math.sin(t * 0.07) * 3 - renderer.fitHeight(b) * 0.25,
+      z: (b.y0 + b.y1) / 2 + Math.cos(t * 0.05) * 2,
+      height: renderer.fitHeight(b) * 0.9,
+    });
+  } else if (!paused) {
     acc += dt * speed;
     while (acc >= SIM_DT) {
       game.update(SIM_DT);
@@ -165,6 +213,10 @@ renderer.renderer.setAnimationLoop((now) => {
   }
   if (game.net.version !== drawnRoads) {
     drawnRoads = game.net.version;
+    const built = game.net.adj.size + game.net.specials.size + game.net.motorways.length;
+    if (builtCount >= 0 && built > builtCount) sound.place();
+    if (builtCount >= 0 && built < builtCount) sound.erase();
+    builtCount = built;
     roadRenderer.rebuild(game.net);
     toolbar.update(game.net.available(), game.net.inventory);
     for (const k of Object.keys(TOOL_TIPS)) {
@@ -194,8 +246,24 @@ renderer.renderer.setAnimationLoop((now) => {
     // Zoom in on the destination that overflowed, framed above the card that fades in.
     const d = game.over.dest, height = 14;
     Object.assign(renderer.viewTarget, { x: d.x + 1, z: d.y + 1 + height * 0.26, height });
-    gameOver.show(game.score, game.over.time);
+    const best = highScore.get();
+    const isBest = highScore.record(game.score);
+    gameOver.show(game.score, game.over.time, isBest, best);
   }
+  for (const ev of game.events.splice(0)) {
+    if (ev.type === 'deliver') sound.deliver(ev.dest.color);
+    else if (ev.type === 'spawn') sound.spawn();
+    else if (ev.type === 'week') sound.week();
+    else if (ev.type === 'gameOver') sound.gameOver();
+  }
+  if (!paused && !menu.visible && !game.over) {
+    // Cars stuck for a while honk now and then; a filling ring ticks faster as it nears full.
+    if (game.cars.some((c) => c.waitingSince < game.time - 4) && Math.random() < 0.02) sound.horn();
+    const worst = Math.max(0, ...game.buildings.dests.map((d) => d.overflow));
+    if (worst > 0) sound.warn(worst);
+  }
+  sound.setMusicLevel(menu.visible || game.over || paused ? 0.55 : 1);
+  buildingRenderer.animate();
   tutorial.update(game);
   roadRenderer.updateLights((i) => game.traffic.lightAt(i, game.time));
   carRenderer.update(game);

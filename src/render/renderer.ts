@@ -55,7 +55,9 @@ export class GameRenderer {
   private map?: MapData;
 
   constructor(container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // `?record` keeps the frame around after drawing so it can be copied into a video capture.
+    const record = new URLSearchParams(location.search).has('record');
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: record });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
