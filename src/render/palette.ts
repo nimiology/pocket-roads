@@ -7,4 +7,8 @@ export const PALETTE = {
   mountain: '#c8bb9c',
   outside: '#e2dccd',
   gridLine: '#000000',
+  road: '#5b5f66',
+  bridge: '#8a8f97',
+  bridgeRail: '#44474d',
+  tunnel: '#3b3a38',
 };
