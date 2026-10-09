@@ -11,4 +11,9 @@ export const PALETTE = {
   bridge: '#8a8f97',
   bridgeRail: '#44474d',
   tunnel: '#3b3a38',
+  parking: '#cfcbc2',
+  parkingLine: '#f7f5f0',
+  pin: '#ffffff',
+  /** One per game color id. */
+  colors: ['#e8584a', '#3f8fd8', '#f2b230', '#3db58a', '#9a6ad6', '#f07f3c'],
 };

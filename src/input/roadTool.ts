@@ -18,6 +18,8 @@ export class RoadTool {
     private roads: RoadRenderer,
     private getNet: () => RoadNetwork,
     private isPanning: () => boolean,
+    /** Maps a pressed tile to where a stroke starts, e.g. a house to its driveway's access tile. */
+    private strokeStart: (i: number) => number = (i) => i,
   ) {
     const el = r.renderer.domElement;
     el.addEventListener('pointerdown', this.onDown);
@@ -37,7 +39,7 @@ export class RoadTool {
     const t = this.tileAt(e);
     const net = this.getNet();
     if (!t || !net.grid.contains(t.x, t.y)) return;
-    const i = net.idx(t.x, t.y);
+    const i = e.button === 2 ? net.idx(t.x, t.y) : this.strokeStart(net.idx(t.x, t.y));
     if (e.button === 2) {
       this.mode = 'erase';
       net.removeTile(i);
@@ -88,8 +90,9 @@ export class RoadTool {
       return;
     }
     if (this.mode === 'erase') return this.roads.setHover(t.x, t.y, 'erase');
-    const i = net.idx(t.x, t.y);
-    const ok = net.hasTile(i) || (net.isBuildable(t.x, t.y) && !net.isSpanTile(i) && net.available().roads > 0);
+    const i = this.strokeStart(net.idx(t.x, t.y));
+    const [sx, sy] = net.xy(i);
+    const ok = net.hasTile(i) || (net.isBuildable(sx, sy) && !net.isSpanTile(i) && net.available().roads > 0);
     this.roads.setHover(t.x, t.y, ok ? 'ok' : 'bad');
   }
 }
