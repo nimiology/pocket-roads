@@ -14,6 +14,7 @@ export const PALETTE = {
   parking: '#cfcbc2',
   parkingLine: '#f7f5f0',
   pin: '#ffffff',
+  warning: '#e5483a',
   /** One per game color id. */
   colors: ['#e8584a', '#3f8fd8', '#f2b230', '#3db58a', '#9a6ad6', '#f07f3c'],
 };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { HOUSE_CARS } from './buildings';
-import { Game } from './game';
+import { CAPACITY, HOUSE_CARS } from './buildings';
+import { CONFIG, Game } from './game';
 import { Grid } from './grid';
 import { MapData } from './mapgen';
 import { MIN_GAP } from './traffic';
@@ -87,6 +87,32 @@ describe('Game', () => {
     expect(game.colorsInPlay).toBeGreaterThan(1);
   });
 
+  it('ends the game when an unserved destination overflows', () => {
+    const game = new Game(flatMap(7));
+    const d = game.buildings.dests[0];
+    run(game, 400, () => {
+      expect(d.pins).toBeLessThanOrEqual(CAPACITY[d.shape] + CONFIG.maxExtraPins);
+    });
+    expect(game.over?.dest).toBe(d);
+    const frozen = game.time;
+    run(game, 5);
+    expect(game.time).toBe(frozen);
+  });
+
+  it('drains the warning ring once deliveries catch up', () => {
+    const game = new Game(flatMap(2));
+    game.net.inventory.roads = 500;
+    const d = game.buildings.dests[0];
+    d.pins = CAPACITY[d.shape] + 2;
+    run(game, 5);
+    expect(d.overflow).toBeGreaterThan(0);
+    for (const h of game.buildings.houses) connect(game, h.access, d.access);
+    run(game, 90);
+    expect(game.over).toBeNull();
+    expect(d.pins).toBeLessThanOrEqual(CAPACITY[d.shape]);
+    expect(d.overflow).toBe(0);
+  });
+
   it('keeps traffic rules on a busy network', () => {
     const game = new Game(flatMap(11));
     game.net.inventory.roads = 2000;
@@ -143,4 +169,3 @@ function checkTraffic(game: Game) {
   }
   for (const c of game.cars) if (c.state === 'parked') expect(c.dest.spots[c.spot]).toBe(c.id);
 }
-

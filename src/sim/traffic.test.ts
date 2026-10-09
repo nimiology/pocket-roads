@@ -35,6 +35,7 @@ describe('Traffic', () => {
   it('keeps flowing under heavy demand with adjacent junctions (no permanent gridlock)', () => {
     const game = new Game(generateMap(7));
     game.net.inventory.roads = 400;
+    game.sandbox = true;
     let jumped = false;
     const scoreAtMinute: number[] = [];
     for (let step = 0; step < 60 * 600; step++) {

@@ -7,6 +7,7 @@ import { GameRenderer } from './render/renderer';
 import { RoadRenderer } from './render/roads';
 import { Game } from './sim/game';
 import { generateMap } from './sim/mapgen';
+import { GameOverScreen } from './ui/gameOver';
 import { Toolbar } from './ui/toolbar';
 
 /** Fixed simulation step; rendering interpolates nothing yet, cars just move in small steps. */
@@ -18,6 +19,7 @@ const roadRenderer = new RoadRenderer(renderer.scene);
 const buildingRenderer = new BuildingRenderer(renderer.scene);
 const carRenderer = new CarRenderer(renderer.scene);
 const toolbar = new Toolbar(document.body);
+const gameOver = new GameOverScreen(document.body, () => newGame(seed), () => newGame(Math.floor(Math.random() * 1e6)));
 
 const hud = document.createElement('div');
 hud.className = 'hud';
@@ -25,7 +27,7 @@ document.body.appendChild(hud);
 const hint = document.createElement('div');
 hint.className = 'hint';
 hint.textContent =
-  'drag road · right-drag erase · scroll zoom · middle/space-drag pan · P pause · 1/2/3 speed · R new map · G grow · T/B/N +roads/bridge/tunnel';
+  'drag road · right-drag erase · scroll zoom · middle/space-drag pan · P pause · 1/2/3 speed · O sandbox · R new map · G grow · T/B/N +roads/bridge/tunnel';
 document.body.appendChild(hint);
 
 const params = new URLSearchParams(location.search);
@@ -35,11 +37,14 @@ let speed = 1;
 let paused = false;
 let drawnRoads = -1;
 let drawnBuildings = -1;
+let shownOver = false;
 
 function newGame(newSeed: number) {
   seed = newSeed;
   game = new Game(generateMap(seed));
   drawnRoads = drawnBuildings = -1;
+  shownOver = false;
+  gameOver.hide();
   buildingRenderer.clear();
   renderer.setMap(game.map);
   renderer.resize();
@@ -49,9 +54,9 @@ function newGame(newSeed: number) {
 
 function updateHud() {
   const mins = Math.floor(game.time / 60), secs = Math.floor(game.time % 60).toString().padStart(2, '0');
-  const state = paused ? 'paused' : `${speed}x`;
+  const state = game.over ? 'game over' : paused ? 'paused' : `${speed}x`;
   hud.innerHTML = `<span class="title">${game.score}</span>
-    <span class="meta">${mins}:${secs} · ${state} · seed ${seed} · stage ${game.stage + 1}/${game.map.stages.length}</span>`;
+    <span class="meta">${mins}:${secs} · ${state}${game.sandbox ? ' · sandbox' : ''} · seed ${seed} · stage ${game.stage + 1}/${game.map.stages.length}</span>`;
 }
 
 const camera = new CameraControls(
@@ -69,6 +74,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'g' && game.grow()) renderer.setBounds(game.bounds);
   if (e.key === 'f') renderer.setBounds(game.bounds);
   if (e.key === 'p') paused = !paused;
+  if (e.key === 'o') game.sandbox = !game.sandbox;
   if (['1', '2', '3'].includes(e.key)) {
     speed = Number(e.key);
     paused = false;
@@ -124,6 +130,14 @@ renderer.renderer.setAnimationLoop((now) => {
   if (game.buildings.version !== drawnBuildings) {
     drawnBuildings = game.buildings.version;
     buildingRenderer.sync(game.buildings);
+  }
+  buildingRenderer.updateWarnings(game.buildings.dests, now / 1000);
+  if (game.over && !shownOver) {
+    shownOver = true;
+    // Zoom in on the destination that overflowed, framed above the card that fades in.
+    const d = game.over.dest, height = 14;
+    Object.assign(renderer.viewTarget, { x: d.x + 1, z: d.y + 1 + height * 0.26, height });
+    gameOver.show(game.score, game.over.time);
   }
   carRenderer.update(game);
   updateHud();

@@ -21,6 +21,14 @@ export const CONFIG = {
   /** Pin rate multiplier grows by 1 every this many seconds. */
   difficultyRamp: 300,
   dispatchEvery: 0.4,
+  /** Seconds an over-capacity destination takes to fill its warning ring. */
+  overflowSeconds: 50,
+  /** Ring fill rate while cars are on their way to help. */
+  overflowSlowdown: 0.4,
+  /** Seconds to drain a full ring once back under capacity. */
+  overflowRecover: 15,
+  /** Pins pile up to this many past capacity; extra demand is dropped. */
+  maxExtraPins: 6,
   startingInventory: { roads: 30, bridges: 1, tunnels: 1 } as Inventory,
 };
 
@@ -34,6 +42,10 @@ export class Game {
   score = 0;
   stage = 0;
   colorsInPlay = 0;
+  /** Set once a destination's warning ring fills. */
+  over: { dest: Destination; time: number } | null = null;
+  /** Rings still fill, but never end the game (stress tests, dev play). */
+  sandbox = false;
   private rng: Rng;
   private nextCarId = 0;
   private houseTimer = 0;
@@ -67,6 +79,7 @@ export class Game {
   }
 
   update(dt: number): void {
+    if (this.over) return;
     this.time += dt;
     if (this.net.version !== this.seenNetVersion) {
       this.seenNetVersion = this.net.version;
@@ -74,6 +87,8 @@ export class Game {
     }
     this.spawnTick(dt);
     this.pinTick(dt);
+    this.overflowTick(dt);
+    if (this.over) return;
     this.dispatchTimer += dt;
     if (this.dispatchTimer >= CONFIG.dispatchEvery) {
       this.dispatchTimer = 0;
@@ -188,8 +203,7 @@ export class Game {
       const every = CONFIG.pinEvery[d.shape];
       if (d.pinTimer >= every) {
         d.pinTimer -= every;
-        // Overflow and game over arrive in a later milestone; for now cap the pile.
-        if (d.pins < CAPACITY[d.shape] + 3) {
+        if (d.pins < CAPACITY[d.shape] + CONFIG.maxExtraPins) {
           d.pins++;
           this.buildings.version++;
         }
@@ -197,11 +211,27 @@ export class Game {
     }
   }
 
-  /** Send idle cars toward destinations whose pins aren't already covered, neediest first. */
+  /** Over capacity fills the warning ring (slower while help is coming); under capacity drains it. */
+  private overflowTick(dt: number) {
+    for (const d of this.buildings.dests) {
+      const before = d.overflow;
+      if (d.pins > CAPACITY[d.shape]) {
+        const rate = d.assigned > 0 ? CONFIG.overflowSlowdown : 1;
+        d.overflow = Math.min(1, d.overflow + (dt * rate) / CONFIG.overflowSeconds);
+        if (d.overflow >= 1 && !this.over && !this.sandbox) this.over = { dest: d, time: this.time };
+      } else if (d.overflow > 0) {
+        d.overflow = Math.max(0, d.overflow - dt / CONFIG.overflowRecover);
+      }
+      if ((before > 0) !== (d.overflow > 0)) this.buildings.version++;
+    }
+  }
+
+  /** Send idle cars toward destinations whose pins aren't already covered: overflowing first, then by backlog. */
   private dispatch() {
+    const backlog = (d: Destination) => d.pins - d.assigned;
     const dests = this.buildings.dests
-      .filter((d) => d.pins > d.assigned && this.net.hasTile(d.access))
-      .sort((a, b) => b.pins - b.assigned - (a.pins - a.assigned));
+      .filter((d) => backlog(d) > 0 && this.net.hasTile(d.access))
+      .sort((a, b) => b.overflow - a.overflow || backlog(b) - backlog(a));
     for (const d of dests) {
       let need = d.pins - d.assigned;
       this.graph.explore(d.door, (node, _dist, pathTo) => {

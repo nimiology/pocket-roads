@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Buildings, CAPACITY, Destination, Dir, House, destTiles } from '../sim/buildings';
+import { CONFIG } from '../sim/game';
 import { PALETTE } from './palette';
 
 const HOUSE_W = 0.56;
@@ -7,6 +8,8 @@ const HOUSE_H = 0.3;
 const ROOF_H = 0.3;
 const DEST_H = 0.42;
 const PIN_R = 0.085;
+const RING_IN = 1.42;
+const RING_OUT = 1.6;
 
 const boxGeo = new THREE.BoxGeometry(1, 1, 1);
 const cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24);
@@ -23,6 +26,11 @@ export class BuildingRenderer {
   private roadMat = new THREE.MeshLambertMaterial({ color: PALETTE.road });
   private parkingMat = new THREE.MeshLambertMaterial({ color: PALETTE.parking });
   private lineMat = new THREE.MeshLambertMaterial({ color: PALETTE.parkingLine });
+  private ringBgMat = new THREE.MeshBasicMaterial({ color: PALETTE.warning, transparent: true, opacity: 0.18, depthWrite: false });
+  private ringMat = new THREE.MeshBasicMaterial({ color: PALETTE.warning, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  private ringBgGeo = new THREE.RingGeometry(RING_IN, RING_OUT, 48).rotateX(-Math.PI / 2);
+  /** Warning ring per overflowing destination: faint full track plus a filled arc. */
+  private rings = new Map<number, { group: THREE.Group; arc: THREE.Mesh; fill: number }>();
 
   constructor(scene: THREE.Scene) {
     scene.add(this.group);
@@ -38,6 +46,8 @@ export class BuildingRenderer {
   }
 
   clear(): void {
+    for (const r of this.rings.values()) r.arc.geometry.dispose();
+    this.rings.clear();
     this.group.clear();
     this.built = 0;
     this.pins.count = 0;
@@ -110,18 +120,54 @@ export class BuildingRenderer {
       const along = new THREE.Vector3(-d.side[1], 0, d.side[0]);
       const across = new THREE.Vector3(d.side[0], 0, d.side[1]);
       const perRow = 5;
-      const shown = Math.min(d.pins, CAPACITY[d.shape] + 3);
+      const shown = Math.min(d.pins, CAPACITY[d.shape] + CONFIG.maxExtraPins);
+      const rows = Math.ceil(shown / perRow);
       for (let k = 0; k < shown && n < this.pins.instanceMatrix.count; k++) {
         const col = k % perRow, row = Math.floor(k / perRow);
         const p = bc.clone()
           .addScaledVector(along, (col - (perRow - 1) / 2) * 0.24)
-          .addScaledVector(across, (row - 0.5) * 0.26)
+          .addScaledVector(across, (row - (rows - 1) / 2) * 0.19)
           .setY(DEST_H + 0.02);
         this.pins.setMatrixAt(n++, m.makeTranslation(p.x, p.y, p.z));
       }
     }
     this.pins.count = n;
     this.pins.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Grow, shrink and pulse the overflow rings; call every frame. */
+  updateWarnings(dests: Destination[], time: number): void {
+    for (const d of dests) {
+      let r = this.rings.get(d.id);
+      if (d.overflow <= 0) {
+        if (r) {
+          r.arc.geometry.dispose();
+          this.group.remove(r.group);
+          this.rings.delete(d.id);
+        }
+        continue;
+      }
+      if (!r) {
+        const group = new THREE.Group();
+        group.position.set(d.x + 1, 0.05, d.y + 1);
+        const bg = new THREE.Mesh(this.ringBgGeo, this.ringBgMat);
+        const arc = new THREE.Mesh(new THREE.BufferGeometry(), this.ringMat);
+        bg.renderOrder = arc.renderOrder = 2;
+        group.add(bg, arc);
+        this.group.add(group);
+        r = { group, arc, fill: -1 };
+        this.rings.set(d.id, r);
+      }
+      if (Math.abs(r.fill - d.overflow) > 0.004) {
+        r.fill = d.overflow;
+        r.arc.geometry.dispose();
+        // Fills clockwise from 12 o'clock as seen from above.
+        r.arc.geometry = new THREE.RingGeometry(RING_IN, RING_OUT, 64, 1, Math.PI / 2, -Math.PI * 2 * d.overflow).rotateX(-Math.PI / 2);
+      }
+    }
+    // Pulse faster as the worst ring nears full.
+    const worst = Math.max(0, ...dests.map((d) => d.overflow));
+    this.ringMat.opacity = 0.75 + 0.25 * Math.sin(time * (4 + worst * 10));
   }
 }
 

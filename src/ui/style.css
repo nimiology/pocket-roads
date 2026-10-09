@@ -24,3 +24,24 @@ body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, sans-serif; color: 
 .tool svg { width: 22px; height: 22px; }
 .tool span { font-weight: 700; font-size: 15px; min-width: 1.4em; font-variant-numeric: tabular-nums; }
 .tool.empty { opacity: 0.35; }
+
+.game-over {
+  position: fixed; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
+  background: rgba(233, 227, 213, 0.35); animation: fade-in 0.6s ease 0.8s both;
+}
+.game-over[hidden] { display: none; }
+.game-over .card {
+  min-width: 240px; padding: 22px 28px; border-radius: 18px; text-align: center;
+  background: rgba(250, 247, 240, 0.96); box-shadow: 0 6px 30px rgba(60, 50, 30, 0.18);
+}
+.game-over .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.6; }
+.game-over .score { font-size: 56px; font-weight: 800; line-height: 1.1; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.game-over .sub { font-size: 13px; opacity: 0.7; }
+.game-over .actions { display: flex; gap: 8px; justify-content: center; margin-top: 18px; }
+.game-over button {
+  font: inherit; font-weight: 700; font-size: 14px; padding: 8px 16px; border: none; border-radius: 10px;
+  background: #5b5f66; color: #faf7f0; cursor: pointer;
+}
+.game-over button:last-child { background: #e3ddcf; color: #4a4740; }
+.game-over button:hover { filter: brightness(1.08); }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }

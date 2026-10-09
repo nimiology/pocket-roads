@@ -43,6 +43,8 @@ export interface Destination {
   /** Id of the car holding each parking spot, or null. */
   spots: (number | null)[];
   pinTimer: number;
+  /** Overflow warning progress, 0..1; reaching 1 ends the game. */
+  overflow: number;
   spawnedAt: number;
 }
 
@@ -120,7 +122,7 @@ export class Buildings {
       parkingTiles: tiles.parking.map(([tx, ty]) => this.idx(tx, ty)),
       door,
       access: this.idx(tiles.parking[0][0] + side[0], tiles.parking[0][1] + side[1]),
-      pins: 0, assigned: 0, spots: Array(PARKING_SPOTS).fill(null), pinTimer: 0, spawnedAt: now,
+      pins: 0, assigned: 0, spots: Array(PARKING_SPOTS).fill(null), pinTimer: 0, overflow: 0, spawnedAt: now,
     };
     this.dests.push(d);
     this.register(d, [...d.buildingTiles, ...d.parkingTiles]);
