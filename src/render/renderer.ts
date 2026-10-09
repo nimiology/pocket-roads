@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Bounds, Terrain, boundsHeight, boundsWidth, inBounds } from '../sim/grid';
 import { MapData } from '../sim/mapgen';
 import { mulberry32 } from '../sim/rng';
+import { Theme } from './themes';
 import { PALETTE } from './palette';
 
 /** Instanced scenery whose instances each belong to a tile, so they can fade outside the play area. */
@@ -44,6 +45,7 @@ export class GameRenderer {
   readonly viewTarget = { x: 0, z: 0, height: 12 };
 
   private sun: THREE.DirectionalLight;
+  private fill: THREE.HemisphereLight;
   private mapGroup = new THREE.Group();
   private tiles?: THREE.InstancedMesh;
   private scenery: Scenery[] = [];
@@ -60,19 +62,28 @@ export class GameRenderer {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: record });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(PALETTE.background);
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
 
-    this.scene.add(new THREE.HemisphereLight('#ffffff', '#b3a78f', 1.6));
-    this.sun = new THREE.DirectionalLight('#fff4e0', 1.5);
+    this.fill = new THREE.HemisphereLight('#ffffff', '#ffffff', 1.75);
+    this.scene.add(this.fill);
+    this.sun = new THREE.DirectionalLight('#ffffff', 1.5);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
     this.sun.shadow.bias = -0.0005;
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.sun, this.sun.target, this.mapGroup);
+  }
+
+  /** Switch background and lighting to a theme; call setMap afterwards to recolour the terrain. */
+  applyTheme(theme: Theme): void {
+    (this.scene.background as THREE.Color).set(PALETTE.background);
+    this.fill.intensity = theme.light.fill;
+    this.sun.intensity = theme.light.sun;
+    this.sun.color.set(theme.light.sunColor);
   }
 
   setMap(map: MapData): void {
@@ -190,7 +201,8 @@ export class GameRenderer {
     }
 
     const cx = grid.w / 2, cz = grid.h / 2;
-    this.sun.position.set(cx - 14, 30, cz - 10);
+    // Low sun from the top-left: long, bold shadows falling to the bottom-right.
+    this.sun.position.set(cx - 14, 11, cz - 14);
     this.sun.target.position.set(cx, 0, cz);
     const r = Math.max(grid.w, grid.h) * 0.75;
     Object.assign(this.sun.shadow.camera, { left: -r, right: r, top: r, bottom: -r, near: 1, far: 100 });
@@ -293,7 +305,7 @@ export class GameRenderer {
     for (let y = b.y0; y <= b.y1; y++) pts.push(b.x0, yy, y, b.x1, yy, y);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    const mat = new THREE.LineBasicMaterial({ color: PALETTE.gridLine, transparent: true, opacity: 0.045 });
+    const mat = new THREE.LineBasicMaterial({ color: PALETTE.gridLine, transparent: true, opacity: 0 });
     this.gridLines = new THREE.LineSegments(geo, mat);
     this.mapGroup.add(this.gridLines);
   }

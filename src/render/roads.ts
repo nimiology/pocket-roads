@@ -4,7 +4,7 @@ import { RoadNetwork } from '../sim/roads';
 import { approachAxis } from '../sim/traffic';
 import { PALETTE } from './palette';
 
-const ROAD_W = 0.5;
+const ROAD_W = 0.62;
 const ROAD_H = 0.03;
 const ROAD_Y = ROAD_H / 2 + 0.004;
 const BRIDGE_W = 0.62;

@@ -5,6 +5,7 @@ import { BuildingRenderer } from './render/buildings';
 import { CarRenderer } from './render/cars';
 import { GameRenderer } from './render/renderer';
 import { RoadRenderer } from './render/roads';
+import { DayNight, applyTheme, saveMode, savedMode } from './render/themes';
 import { CONFIG, Game } from './sim/game';
 import { generateMap } from './sim/mapgen';
 import { GameOverScreen } from './ui/gameOver';
@@ -45,12 +46,35 @@ function startPlaying(forceTutorial = false) {
   renderer.setBounds(game.bounds);
   tutorial.start(forceTutorial);
 }
+let mode: DayNight = savedMode();
+/** Recolour everything for the current city's theme and the day/night choice. */
+function useTheme() {
+  const theme = applyTheme(seed, mode);
+  renderer.applyTheme(theme);
+  buildingRenderer.applyTheme();
+  document.documentElement.style.setProperty('--theme-bg', theme.colors.background);
+  document.documentElement.classList.toggle('night', mode === 'night');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme.colors.background);
+  if (game) {
+    renderer.setMap(game.map);
+    renderer.setBounds(game.bounds, true);
+    drawnRoads = -1;
+    drawnTrees = '';
+  }
+}
+function toggleNight(): boolean {
+  mode = mode === 'night' ? 'day' : 'night';
+  saveMode(mode);
+  useTheme();
+  return mode === 'night';
+}
 const menu = new Menu(document.body, {
   play: () => startPlaying(),
   newCity: () => newGame(randomSeed()),
   tutorial: () => startPlaying(true),
   toggleSound,
-}, sound.muted);
+  toggleNight,
+}, sound.muted, mode === 'night');
 // Every button gives a soft click.
 document.addEventListener('click', (e) => {
   if ((e.target as HTMLElement).closest('button, .tool.pickable')) sound.click();
@@ -58,7 +82,7 @@ document.addEventListener('click', (e) => {
 const hint = document.createElement('div');
 hint.className = 'hint';
 hint.textContent =
-  'drag road · drag out of a house to turn it · right-drag erase · right-click a tool to remove it · scroll zoom · middle/space-drag pan · P pause · 1/2 speed · H tutorial · O sandbox · R new map · G grow · T/B/N/Y/U/M +roads/bridge/tunnel/roundabout/light/motorway · Esc road tool';
+  'drag road · drag out of a house to turn it · right-drag erase · right-click a tool to remove it · scroll zoom · middle/space-drag pan · P pause · 1/2 speed · H tutorial · L day/night · O sandbox · R new map · G grow · T/B/N/Y/U/M +roads/bridge/tunnel/roundabout/light/motorway · Esc road tool';
 document.body.appendChild(hint);
 
 const params = new URLSearchParams(location.search);
@@ -84,6 +108,7 @@ const TOOL_TIPS: Record<string, string> = {
 function newGame(newSeed: number) {
   seed = newSeed;
   game = new Game(generateMap(seed));
+  useTheme();
   drawnRoads = drawnBuildings = -1;
   shownOver = false;
   shownStage = 0;
@@ -140,6 +165,7 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') startPlaying();
     return;
   }
+  if (e.key === 'l') menu.setNight(toggleNight());
   if (e.key === 'r') newGame(Math.floor(Math.random() * 1e6));
   if (e.key === 'g') game.grow();
   if (e.key === 'f') renderer.setBounds(game.bounds);

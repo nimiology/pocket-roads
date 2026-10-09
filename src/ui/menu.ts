@@ -17,13 +17,15 @@ export interface MenuActions {
   newCity(): void;
   tutorial(): void;
   toggleSound(): boolean;
+  /** Flips day/night; returns true when it is now night. */
+  toggleNight(): boolean;
 }
 
 /** Title screen over the live map: play, new city, best score, sound, how to play. */
 export class Menu {
   private el: HTMLDivElement;
 
-  constructor(parent: HTMLElement, actions: MenuActions, muted: boolean) {
+  constructor(parent: HTMLElement, actions: MenuActions, muted: boolean, night: boolean) {
     this.el = document.createElement('div');
     this.el.className = 'menu';
     this.el.innerHTML = `<div class="panel">
@@ -35,14 +37,16 @@ export class Menu {
         <button data-act="new">New city</button>
         <button data-act="tutorial">How to play</button>
       </div>
-      <div class="foot"><span class="best"></span><button class="sound" data-act="sound"></button></div>
+      <div class="foot"><span class="best"></span><span><button class="daynight" data-act="daynight"></button><button class="sound" data-act="sound"></button></span></div>
     </div>`;
     const on = (act: string, fn: () => void) => this.el.querySelector(`[data-act="${act}"]`)!.addEventListener('click', fn);
     on('play', () => actions.play());
     on('new', () => actions.newCity());
     on('tutorial', () => actions.tutorial());
     on('sound', () => this.setSound(actions.toggleSound()));
+    on('daynight', () => this.setNight(actions.toggleNight()));
     this.setSound(muted);
+    this.setNight(night);
     parent.appendChild(this.el);
     this.show();
   }
@@ -53,6 +57,10 @@ export class Menu {
 
   private setSound(muted: boolean) {
     this.el.querySelector('.sound')!.textContent = muted ? 'Sound off' : 'Sound on';
+  }
+
+  setNight(night: boolean) {
+    this.el.querySelector('.daynight')!.textContent = night ? '☾ Night' : '☀ Day';
   }
 
   refresh(): void {

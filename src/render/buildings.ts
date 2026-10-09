@@ -2,12 +2,9 @@ import * as THREE from 'three';
 import { Buildings, CAPACITY, Destination, Dir, House, destTiles } from '../sim/buildings';
 import { CONFIG } from '../sim/game';
 import { PALETTE, shade } from './palette';
-import { gableRoof, roundedBox, roundedRect, roundedSlab, slab } from './shapes';
+import { roundedBox, roundedRect, roundedSlab, slab } from './shapes';
 
-const HOUSE_W = 0.5;
-const WALL_H = 0.2;
-const ROOF_H = 0.24;
-const DEST_H = 0.36;
+const DEST_H = 0.42;
 const PIN_R = 0.08;
 const POP_TIME = 0.5;
 
@@ -18,17 +15,16 @@ function easeOutBack(t: number): number {
 }
 
 // Shared geometry: built once, reused by every building.
-const wallGeo = roundedBox(HOUSE_W, WALL_H, HOUSE_W * 0.86, 0.04).translate(0, WALL_H / 2, 0);
-const roofGeo = gableRoof(HOUSE_W + 0.06, HOUSE_W * 0.86 + 0.08, ROOF_H);
-const chimneyGeo = roundedBox(0.07, 0.12, 0.07, 0.015);
-const padGeo = roundedSlab(0.74, 0.74, 0.02, 0.12, 0.008);
-const squareGeo = roundedSlab(1.8, 0.86, DEST_H, 0.14, 0.04);
-const squareRoofGeo = roundedSlab(1.56, 0.62, 0.02, 0.08, 0.008);
-const circleGeo = slab(roundedRect(1.82, 0.86, 0.43), DEST_H, 0.04);
-const circleRoofGeo = slab(roundedRect(1.5, 0.56, 0.28), 0.02, 0.008);
-const unitGeo = roundedBox(0.16, 0.07, 0.12, 0.02);
-const lotGeo = roundedSlab(1.98, 0.98, 0.026, 0.14, 0.01);
-const kerbGeo = roundedBox(1.9, 0.05, 0.08, 0.025);
+const squareGeo = roundedSlab(1.6, 0.74, DEST_H, 0.1, 0.03);
+const squareRoofGeo = roundedSlab(1.5, 0.64, 0.05, 0.08, 0.012);
+const circleGeo = slab(roundedRect(1.62, 0.74, 0.37), DEST_H, 0.03);
+const circleRoofGeo = slab(roundedRect(1.52, 0.64, 0.32), 0.05, 0.012);
+/** Houses are simple chunky blocks; destinations sit on a dark rounded slab with their lot. */
+const HOUSE_BLOCK = 0.46, HOUSE_H = 0.34;
+const houseGeo = roundedBox(HOUSE_BLOCK, HOUSE_H, HOUSE_BLOCK, 0.05).translate(0, HOUSE_H / 2, 0);
+const houseCapGeo = roundedBox(HOUSE_BLOCK - 0.06, 0.02, HOUSE_BLOCK - 0.06, 0.008);
+const baseGeo = roundedSlab(1.96, 1.96, 0.05, 0.22, 0.012);
+const hatchGeo = new THREE.BoxGeometry(0.03, 0.004, 0.3);
 /** Pins: a white puck sitting on a slightly larger dark rim, readable on every building colour. */
 const pinGeo = new THREE.CylinderGeometry(PIN_R, PIN_R, 0.035, 18).translate(0, 0.025, 0);
 const pinRimGeo = new THREE.CylinderGeometry(PIN_R + 0.018, PIN_R + 0.018, 0.02, 18).translate(0, 0.01, 0);
@@ -53,20 +49,10 @@ export class BuildingRenderer {
   private colorMats = PALETTE.colors.map((c) => new THREE.MeshLambertMaterial({ color: c }));
   /** Lighter tint for roofs of destinations and the walls of houses. */
   private paleMats = PALETTE.colors.map((c) => new THREE.MeshLambertMaterial({ color: shade(c, 0.1, -0.08) }));
-  private wallMats = PALETTE.colors.map((c) => new THREE.MeshLambertMaterial({ color: shade(c, 0.32, -0.25) }));
-  /** Per colour: [sunny slope, shaded slope]. */
-  private roofMats = PALETTE.colors.map((c) => [
-    new THREE.MeshLambertMaterial({ color: shade(c, 0.04) }),
-    new THREE.MeshLambertMaterial({ color: shade(c, -0.1) }),
-  ]);
   private roadMat = new THREE.MeshLambertMaterial({ color: PALETTE.road });
-  private padMat = new THREE.MeshLambertMaterial({ color: PALETTE.pad });
-  private parkingMat = new THREE.MeshLambertMaterial({ color: PALETTE.parking });
   private stubMat = new THREE.MeshLambertMaterial({ color: PALETTE.pad });
-  private curbMat = new THREE.MeshLambertMaterial({ color: PALETTE.curb });
   private lineMat = new THREE.MeshLambertMaterial({ color: PALETTE.parkingLine });
-  private unitMat = new THREE.MeshLambertMaterial({ color: '#f4f1ea' });
-  private chimneyMat = new THREE.MeshLambertMaterial({ color: '#8a8173' });
+  private deepMats = PALETTE.colors.map((c) => new THREE.MeshLambertMaterial({ color: shade(c, -0.14, -0.05) }));
   private ringBgMat = new THREE.MeshBasicMaterial({ color: PALETTE.warning, transparent: true, opacity: 0.18, depthWrite: false });
   private ringMat = new THREE.MeshBasicMaterial({ color: PALETTE.warning, transparent: true, depthWrite: false, side: THREE.DoubleSide });
   private ringBgGeo = new THREE.RingGeometry(RING_IN, RING_OUT, 48).rotateX(-Math.PI / 2);
@@ -136,14 +122,9 @@ export class BuildingRenderer {
     const one = new THREE.Vector3(1, 1, 1);
     // Driveway from the house to the centre of its access tile, where it meets any road there.
     this.mesh(boxGeo, this.roadMat, new THREE.Vector3(cx + h.dir[0] * 0.55, 0.012, cz + h.dir[1] * 0.55), new THREE.Vector3(0.9, 0.024, 0.26), yaw);
-    this.mesh(padGeo, this.padMat, new THREE.Vector3(cx, 0, cz), one, yaw);
-    // Walls in a pale tint; the ridge runs across the driveway so the gable faces the street.
-    this.mesh(wallGeo, this.wallMats[h.color], new THREE.Vector3(cx, 0.02, cz), one, yaw + Math.PI / 2);
-    this.mesh(roofGeo, this.roofMats[h.color], new THREE.Vector3(cx, 0.02 + WALL_H, cz), one, yaw + Math.PI / 2);
-    // Chimney on the back half of the roof.
-    const back = new THREE.Vector3(-h.dir[0], 0, -h.dir[1]).multiplyScalar(0.12);
-    const side = new THREE.Vector3(-h.dir[1], 0, h.dir[0]).multiplyScalar(0.12);
-    this.mesh(chimneyGeo, this.chimneyMat, new THREE.Vector3(cx, 0.02 + WALL_H + ROOF_H * 0.62, cz).add(back).add(side), one);
+    // A chunky coloured block with a lighter cap.
+    this.mesh(houseGeo, this.colorMats[h.color], new THREE.Vector3(cx, 0, cz), one, yaw);
+    this.mesh(houseCapGeo, this.paleMats[h.color], new THREE.Vector3(cx, HOUSE_H - 0.004, cz), one, yaw);
     this.houseMeshes.set(h.id, { dir: h.dir, meshes: this.group.children.slice(first) as THREE.Mesh[] });
     this.popFrom(first);
   }
@@ -156,28 +137,20 @@ export class BuildingRenderer {
     const bc = centerOf(building), pc = centerOf(parking);
     const one = new THREE.Vector3(1, 1, 1);
 
-    // Building: a bevelled block (stadium for circle types), a paler roof panel and rooftop units.
+    // Everything sits on one dark rounded slab, the same tone as the roads.
+    this.mesh(baseGeo, this.roadMat, bc.clone().add(pc).multiplyScalar(0.5), one, yaw);
+    // Building: a deep-shaded block with a bright lid, so it reads as a stacked box from above.
     const round = d.shape === 'circle';
-    this.mesh(round ? circleGeo : squareGeo, this.colorMats[d.color], bc.clone(), one, yaw);
-    this.mesh(round ? circleRoofGeo : squareRoofGeo, this.paleMats[d.color], bc.clone().setY(DEST_H), one, yaw);
     const across = new THREE.Vector3(d.side[0], 0, d.side[1]);
-    for (const s of round ? [-0.7, 0.7] : [-0.74, 0.74]) {
-      // Rooftop units sit at the ends, clear of the pins in the middle.
-      this.mesh(unitGeo, this.unitMat, bc.clone().addScaledVector(along, s).setY(DEST_H + 0.055), one, yaw + Math.PI / 2);
-    }
-
-    // Parking: an asphalt lot with four nose-in bays painted along the building side, a low kerb
-    // against the building, and an open aisle in front. Cars can drive in from three sides.
-    this.mesh(lotGeo, this.parkingMat, pc.clone(), one, yaw);
     const back = across.clone().multiplyScalar(-1);
-    this.mesh(kerbGeo, this.curbMat, pc.clone().addScaledVector(back, 0.45).setY(0.05), one, yaw);
-    const LINE_Y = 0.028, BAY_DEPTH = 0.44;
-    for (const s of [-0.96, -0.5, 0, 0.5, 0.96]) {
-      this.mesh(boxGeo, this.lineMat, pc.clone().addScaledVector(along, s * 0.98).addScaledVector(back, 0.41 - BAY_DEPTH / 2).setY(LINE_Y),
-        new THREE.Vector3(0.028, 0.004, BAY_DEPTH), yaw);
+    const bpos = bc.clone().addScaledVector(back, 0.06).setY(0.05);
+    this.mesh(round ? circleGeo : squareGeo, this.deepMats[d.color], bpos, one, yaw);
+    this.mesh(round ? circleRoofGeo : squareRoofGeo, this.colorMats[d.color], bpos.clone().setY(0.05 + DEST_H - 0.01), one, yaw);
+    // Parking: painted diagonal bay hatches on the slab.
+    const LINE_Y = 0.052;
+    for (const s of [-0.75, -0.45, -0.15, 0.15, 0.45, 0.75]) {
+      this.mesh(hatchGeo, this.lineMat, pc.clone().addScaledVector(along, s).addScaledVector(back, 0.18).setY(LINE_Y), one, yaw + Math.PI / 2 + 0.6);
     }
-    // Aisle edge line with a gap at each bay so the lot reads as a car park, not a slab.
-    this.mesh(boxGeo, this.lineMat, pc.clone().addScaledVector(back, 0.41 - BAY_DEPTH).setY(LINE_Y), new THREE.Vector3(1.9, 0.004, 0.022), yaw);
 
     // Entrance stubs from the lot edge to each entrance's access tile; pale until a road arrives.
     const stubs: { access: number; mesh: THREE.Mesh }[] = [];
@@ -190,6 +163,13 @@ export class BuildingRenderer {
     }
     this.entranceMeshes.set(d.id, stubs);
     this.popFrom(first);
+  }
+
+  /** Pick up theme colours for the shared slab, stub and line materials. */
+  applyTheme(): void {
+    this.roadMat.color.set(PALETTE.road);
+    this.stubMat.color.set(PALETTE.pad);
+    this.lineMat.color.set(PALETTE.parkingLine);
   }
 
   /** Show which lot entrances are connected; call when roads change. */
@@ -220,7 +200,7 @@ export class BuildingRenderer {
         const p = bc.clone()
           .addScaledVector(along, (col - (perRow - 1) / 2) * 0.25)
           .addScaledVector(across, (row - (rows - 1) / 2) * 0.2 + 0.02)
-          .setY(DEST_H + 0.02);
+          .setY(DEST_H + 0.09);
         this.pinLayout.push({ pos: p, born: born[k] });
       }
     }
