@@ -3,14 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pocket Roads</title>
+    <title>Pocket Roads – Free Road-Building Traffic Puzzle Game in Your Browser</title>
+    <meta name="description" content="Pocket Roads is a free, calm city traffic puzzle you play in your browser. Draw roads, connect colourful houses to their destinations, add roundabouts, traffic lights and motorways, and keep the city moving." />
+    <meta name="keywords" content="road building game, traffic puzzle, city builder, browser game, free online game, roundabouts, motorways, strategy, casual game" />
+    <meta name="author" content="Nima" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://nimiology.github.io/pocket-roads/" />
+
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <link rel="apple-touch-icon" href="/logo.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta name="theme-color" content="#f5b44c" />
+
+    <!-- Social previews -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Pocket Roads" />
+    <meta property="og:title" content="Pocket Roads – Draw roads. Keep the city moving." />
+    <meta property="og:description" content="A free, calm road-building traffic puzzle in your browser. Roundabouts, golden motorways, day and night." />
+    <meta property="og:url" content="https://nimiology.github.io/pocket-roads/" />
+    <meta property="og:image" content="https://nimiology.github.io/pocket-roads/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A small city in Pocket Roads with dark roads, coloured houses, roundabouts and a golden motorway over a river" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Pocket Roads – Draw roads. Keep the city moving." />
+    <meta name="twitter:description" content="A free, calm road-building traffic puzzle in your browser." />
+    <meta name="twitter:image" content="https://nimiology.github.io/pocket-roads/og-image.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "Pocket Roads",
+        "url": "https://nimiology.github.io/pocket-roads/",
+        "image": "https://nimiology.github.io/pocket-roads/og-image.png",
+        "description": "A free, calm city traffic puzzle in your browser: draw roads, connect houses to destinations, and keep the city moving.",
+        "genre": ["Puzzle", "Strategy", "Simulation"],
+        "gamePlatform": "Web browser",
+        "applicationCategory": "Game",
+        "operatingSystem": "Any",
+        "author": { "@type": "Person", "name": "Nima" },
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "codeRepository": "https://github.com/nimiology/pocket-roads"
+      }
+    </script>
+
     <link rel="stylesheet" href="/src/ui/style.css" />
   </head>
   <body>
     <div id="app"></div>
+    <noscript>
+      <h1>Pocket Roads</h1>
+      <p>Pocket Roads is a free road-building traffic puzzle. Draw roads to connect houses to destinations of the same colour,
+        add roundabouts, traffic lights and motorways, and keep the city from gridlocking. Please enable JavaScript to play.</p>
+      <p><a href="https://github.com/nimiology/pocket-roads">Source code on GitHub</a></p>
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

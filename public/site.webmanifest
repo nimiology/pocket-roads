@@ -1,0 +1,13 @@
+{
+  "name": "Pocket Roads",
+  "short_name": "Pocket Roads",
+  "description": "Draw roads. Keep the city moving.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f5b44c",
+  "theme_color": "#f5b44c",
+  "icons": [
+    { "src": "logo.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "logo.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

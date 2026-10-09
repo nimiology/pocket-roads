@@ -11,7 +11,7 @@ A small, calm city traffic puzzle that runs in your browser.</p>
   <img src="docs/gameplay.gif" width="720" alt="Pocket Roads gameplay: roads being drawn, cars driving through roundabouts and over a golden motorway">
 </p>
 
-<p align="center"><a href="docs/gameplay.mp4">Watch the full clip with sound (MP4)</a></p>
+<p align="center"><b><a href="https://nimiology.github.io/pocket-roads/">▶ Play in your browser</a></b> · <a href="docs/gameplay.mp4">Watch the full clip with sound (MP4)</a></p>
 
 ---
 
