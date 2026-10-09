@@ -14,6 +14,7 @@ import { Menu, highScore } from './ui/menu';
 import { UpgradePicker } from './ui/upgradePicker';
 import { Toolbar } from './ui/toolbar';
 import { Tutorial } from './ui/tutorial';
+import { watchForUpdates } from './ui/updateNotice';
 
 /** Fixed simulation step; rendering interpolates nothing yet, cars just move in small steps. */
 const SIM_DT = 1 / 60;
@@ -79,6 +80,7 @@ const menu = new Menu(document.body, {
 document.addEventListener('click', (e) => {
   if ((e.target as HTMLElement).closest('button, .tool.pickable')) sound.click();
 });
+watchForUpdates(document.body);
 const hint = document.createElement('div');
 hint.className = 'hint';
 hint.textContent =
