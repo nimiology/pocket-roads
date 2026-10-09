@@ -29,7 +29,7 @@ export const CONFIG = {
   overflowRecover: 15,
   /** Pins pile up to this many past capacity; extra demand is dropped. */
   maxExtraPins: 6,
-  startingInventory: { roads: 30, bridges: 1, tunnels: 1 } as Inventory,
+  startingInventory: { roads: 30, bridges: 1, tunnels: 1, roundabouts: 0, lights: 0, motorways: 0 } as Inventory,
   /** Game seconds per week at 1x. */
   weekSeconds: 150,
   /** Road tiles granted at every week's end, before the upgrade pick. */
@@ -46,6 +46,9 @@ const UPGRADE_POOL: Upgrade[] = [
   { bridges: 1, roads: 10 },
   { tunnels: 1, roads: 10 },
   { roads: 30 },
+  { roundabouts: 1, roads: 10 },
+  { lights: 1, roads: 10 },
+  { motorways: 1, roads: 10 },
 ];
 
 export class Game {
@@ -82,7 +85,7 @@ export class Game {
       inBounds(this.bounds, x, y) && !this.buildings.isOccupied(this.net.idx(x, y)),
     );
     this.graph = new DriveGraph(this.net, this.buildings);
-    this.traffic = new Traffic(this.graph, map.grid.w * map.grid.h, CONFIG.carSpeed);
+    this.traffic = new Traffic(this.graph, map.grid.w * map.grid.h, CONFIG.carSpeed, map.grid.w, (i) => this.net.specialAt(i));
     this.seenNetVersion = this.net.version;
     this.region = landRegions(map);
     this.spawnNewColor();
@@ -121,6 +124,9 @@ export class Game {
       this.dispatch();
     }
     this.moveCars(dt);
+    this.net.finishClosing((t) => 'node' in t
+      ? this.traffic.holders(t.node) > 0
+      : this.traffic.linkBusy(t.motorway.a, t.motorway.b));
   }
 
   // ---- weeks ----------------------------------------------------------------
@@ -244,9 +250,22 @@ export class Game {
       });
       if (!side) continue;
       const shape = this.rng() < 0.5 ? 'circle' : 'square';
-      return this.buildings.addDest(x, y, side, color, shape, this.time);
+      return this.buildings.addDest(x, y, side, color, shape, this.time, (ax, ay) => this.buildings.isAccessOk(ax, ay, b));
     }
     return null;
+  }
+
+  /**
+   * Turn a house to face `dir` (the player dragged out of it that way). Allowed when the new
+   * driveway tile is clear land in play; cars on the old driveway head home and are re-sent.
+   */
+  turnHouse(h: House, dir: Dir): boolean {
+    if (h.dir[0] === dir[0] && h.dir[1] === dir[1]) return true;
+    if (!this.buildings.isAccessOk(h.x + dir[0], h.y + dir[1], this.bounds)) return false;
+    this.buildings.turnHouse(h, dir);
+    // Routes through the old driveway are replanned like any road edit.
+    this.net.version++;
+    return true;
   }
 
   private pickDir(ok: (d: Dir) => boolean): Dir | null {
@@ -290,11 +309,11 @@ export class Game {
   private dispatch() {
     const backlog = (d: Destination) => d.pins - d.assigned;
     const dests = this.buildings.dests
-      .filter((d) => backlog(d) > 0 && this.net.hasTile(d.access))
+      .filter((d) => backlog(d) > 0 && d.entrances.some((e) => this.net.hasTile(e.access)))
       .sort((a, b) => b.overflow - a.overflow || backlog(b) - backlog(a));
     for (const d of dests) {
       let need = d.pins - d.assigned;
-      this.graph.explore(d.door, (node, _dist, pathTo) => {
+      this.graph.explore(d.parkingTiles, (node, _dist, pathTo) => {
         const b = this.buildings.byEndpoint.get(node);
         if (b?.kind !== 'house' || b.color !== d.color || b.idleCars === 0) return false;
         const route = pathTo().reverse();
@@ -352,7 +371,8 @@ export class Game {
 
   private leaveParking(car: Car, done: Car[]) {
     const d = car.dest;
-    const home = this.graph.path(d.door, car.house.tile);
+    // Leave from the parking tile the car drove into.
+    const home = this.graph.path(car.path[car.path.length - 1], car.house.tile);
     // Wait in the spot until the exit lane has room.
     if (home && home.length > 1 && !this.traffic.laneHasRoom(home[0], home[1])) return;
     if (d.pins > 0) {
@@ -377,11 +397,11 @@ export class Game {
       if (car.state === 'parked') continue;
       const a = car.path[car.seg], b = car.path[car.seg + 1];
       if (b === undefined) continue;
-      if (!this.graph.hasEdge(a, b)) {
+      if (!this.graph.hasLane(a, b)) {
         lost.push(car);
         continue;
       }
-      const target = car.state === 'toDest' ? car.dest.door : car.house.tile;
+      const target = car.state === 'toDest' ? car.dest.parkingTiles : car.house.tile;
       let rest = this.graph.path(b, target);
       if (!rest && car.state === 'toDest') {
         // Destination cut off: give up the trip and head home instead.

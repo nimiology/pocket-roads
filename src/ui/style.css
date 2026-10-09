@@ -39,6 +39,10 @@ body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, sans-serif; color: 
 .tool svg { width: 22px; height: 22px; }
 .tool span { font-weight: 700; font-size: 15px; min-width: 1.4em; font-variant-numeric: tabular-nums; }
 .tool.empty { opacity: 0.35; }
+.tool[hidden] { display: none; }
+.tool.pickable { cursor: pointer; }
+.tool.pickable:hover { background: rgba(74, 71, 64, 0.08); }
+.tool.selected { background: #4a4740; color: #faf7f0; }
 
 .game-over {
   position: fixed; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;

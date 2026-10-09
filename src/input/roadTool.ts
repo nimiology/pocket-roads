@@ -1,27 +1,45 @@
 import { GameRenderer } from '../render/renderer';
 import { RoadRenderer } from '../render/roads';
+import { DIRS4, Dir, House } from '../sim/buildings';
 import { RoadNetwork } from '../sim/roads';
+import { ToolKind } from '../ui/toolbar';
 
 /** Max cursor offset on the cross axis (from tile centre) that still turns an exit into a diagonal step. */
 const DIAGONAL_SLACK = 0.4;
+/** Right-clicks this close to a motorway's centreline remove the motorway rather than the road below. */
+const MOTORWAY_HIT = 0.3;
+
+export interface RoadToolHooks {
+  tool(): ToolKind;
+  /** The selected tool ran out; fall back to drawing roads. */
+  toolSpent(): void;
+  houseAt(i: number): House | undefined;
+  /** Building's access tile when pressing on a destination, else the tile itself. */
+  strokeStart(i: number): number;
+  turnHouse(h: House, dir: Dir): boolean;
+}
 
 /**
  * Left-drag draws a road through the tiles under the cursor, right-drag erases.
  * Drawing advances one 8-connected step at a time toward the cursor, so fast drags leave no gaps.
+ * Dragging out of a house turns its driveway to face the drag. With a junction tool selected a
+ * click places it; with the motorway tool a drag links two road tiles. Right-click removes tools.
  */
 export class RoadTool {
-  private mode: 'draw' | 'erase' | null = null;
+  private mode: 'draw' | 'erase' | 'motorway' | null = null;
   private current = -1;
   /** The stroke's first tile isn't placed until the drag reaches a neighbour, so a tap builds nothing. */
   private startPending = false;
+  /** House the stroke started on; its facing is decided by the first drag direction. */
+  private fromHouse: House | null = null;
+  private motorwayStart = -1;
 
   constructor(
     private r: GameRenderer,
     private roads: RoadRenderer,
     private getNet: () => RoadNetwork,
     private isPanning: () => boolean,
-    /** Maps a pressed tile to where a stroke starts, e.g. a house to its driveway's access tile. */
-    private strokeStart: (i: number) => number = (i) => i,
+    private hooks: RoadToolHooks,
   ) {
     const el = r.renderer.domElement;
     el.addEventListener('pointerdown', this.onDown);
@@ -41,33 +59,93 @@ export class RoadTool {
     const t = this.tileAt(e);
     const net = this.getNet();
     if (!t || !net.grid.contains(t.x, t.y)) return;
-    const i = e.button === 2 ? net.idx(t.x, t.y) : this.strokeStart(net.idx(t.x, t.y));
+    const tile = net.idx(t.x, t.y);
     if (e.button === 2) {
       this.mode = 'erase';
-      net.removeTile(i);
-    } else {
-      const [sx, sy] = net.xy(i);
-      if (net.hasTile(i) || (net.isBuildable(sx, sy) && !net.isSpanTile(i))) {
-        this.mode = 'draw';
-        this.current = i;
-        this.startPending = !net.hasTile(i);
+      // A click on a tool takes the tool away and leaves the road under it.
+      if (net.specialAt(tile)) net.closeSpecial(tile);
+      else {
+        const m = net.motorwayNear(t.px, t.py, MOTORWAY_HIT);
+        if (m && !m.closing) net.closeMotorway(m);
+        else net.removeTile(tile);
       }
+      return this.updateHover(e);
+    }
+    const tool = this.hooks.tool();
+    if (tool === 'roundabouts' || tool === 'lights') {
+      if (net.placeSpecial(tile, tool === 'roundabouts' ? 'roundabout' : 'light') && net.available()[tool] <= 0) this.hooks.toolSpent();
+      return this.updateHover(e);
+    }
+    if (tool === 'motorways') {
+      if (net.hasTile(tile) && !net.isSpanTile(tile)) {
+        this.mode = 'motorway';
+        this.motorwayStart = tile;
+      }
+      return this.updateHover(e);
+    }
+    const house = this.hooks.houseAt(tile);
+    if (house) {
+      this.mode = 'draw';
+      this.fromHouse = house;
+      return this.updateHover(e);
+    }
+    const i = this.hooks.strokeStart(tile);
+    const [sx, sy] = net.xy(i);
+    if (net.hasTile(i) || (net.isBuildable(sx, sy) && !net.isSpanTile(i))) {
+      this.mode = 'draw';
+      this.beginAt(i);
     }
     this.updateHover(e);
   };
 
+  private beginAt(i: number) {
+    this.current = i;
+    this.startPending = !this.getNet().hasTile(i);
+  }
+
   private onMove = (e: PointerEvent) => {
     const t = this.tileAt(e);
     const net = this.getNet();
-    if (t && this.mode === 'erase' && net.grid.contains(t.x, t.y)) net.removeTile(net.idx(t.x, t.y));
-    if (t && this.mode === 'draw') this.extendToward(t.px, t.py);
+    if (t && this.mode === 'erase' && net.grid.contains(t.x, t.y)) {
+      const i = net.idx(t.x, t.y);
+      // Dragging only erases roads; tools are removed by clicking them.
+      if (!net.specials.has(i)) net.removeTile(i);
+    }
+    if (t && this.mode === 'draw' && this.fromHouse) this.leaveHouse(t.px, t.py);
+    if (t && this.mode === 'draw' && !this.fromHouse) this.extendToward(t.px, t.py);
     this.updateHover(e);
   };
 
-  private onUp = () => {
-    if (this.mode === 'draw') this.getNet().pruneDanglingSpans();
+  /** Once the drag clears the house tile, face the house that way and start the road at its new driveway. */
+  private leaveHouse(px: number, py: number) {
+    const h = this.fromHouse!;
+    const dx = px - (h.x + 0.5), dy = py - (h.y + 0.5);
+    if (Math.max(Math.abs(dx), Math.abs(dy)) <= 0.5) return;
+    const want: Dir = Math.abs(dx) >= Math.abs(dy) ? [Math.sign(dx), 0] : [0, Math.sign(dy)];
+    const dir = DIRS4.find((d) => d[0] === want[0] && d[1] === want[1])!;
+    // If it can't face that way (another building, water...), keep the old driveway.
+    this.hooks.turnHouse(h, dir);
+    this.fromHouse = null;
+    this.beginAt(h.access);
+  }
+
+  private onUp = (e: PointerEvent) => {
+    const net = this.getNet();
+    if (this.mode === 'draw') net.pruneDanglingSpans();
+    if (this.mode === 'motorway') {
+      const end = this.motorwayEnd(e);
+      if (end >= 0 && net.placeMotorway(this.motorwayStart, end) && net.available().motorways <= 0) this.hooks.toolSpent();
+      this.roads.setMotorwayPreview(null);
+    }
     this.mode = null;
+    this.fromHouse = null;
   };
+
+  private motorwayEnd(e: PointerEvent): number {
+    const t = this.tileAt(e);
+    const net = this.getNet();
+    return t && net.grid.contains(t.x, t.y) ? net.idx(t.x, t.y) : -1;
+  }
 
   private extendToward(px: number, py: number) {
     const net = this.getNet();
@@ -102,8 +180,22 @@ export class RoadTool {
       this.roads.setHover(0, 0, null);
       return;
     }
+    const tile = net.idx(t.x, t.y);
     if (this.mode === 'erase') return this.roads.setHover(t.x, t.y, 'erase');
-    const i = this.strokeStart(net.idx(t.x, t.y));
+    if (this.mode === 'motorway') {
+      const end = this.motorwayEnd(e);
+      this.roads.setHover(t.x, t.y, null);
+      this.roads.setMotorwayPreview(net.xy(this.motorwayStart), [t.px - 0.5, t.py - 0.5],
+        end >= 0 && !net.motorwayProblem(this.motorwayStart, end));
+      return;
+    }
+    const tool = this.hooks.tool();
+    if (tool === 'roundabouts' || tool === 'lights') {
+      return this.roads.setHover(t.x, t.y, net.canPlaceSpecial(tile, tool === 'roundabouts' ? 'roundabout' : 'light') ? 'ok' : 'bad');
+    }
+    if (tool === 'motorways') return this.roads.setHover(t.x, t.y, net.hasTile(tile) && !net.isSpanTile(tile) ? 'ok' : 'bad');
+    if (this.hooks.houseAt(tile)) return this.roads.setHover(t.x, t.y, 'ok');
+    const i = this.hooks.strokeStart(tile);
     const [sx, sy] = net.xy(i);
     const ok = net.hasTile(i) || (net.isBuildable(sx, sy) && !net.isSpanTile(i) && net.available().roads > 0);
     this.roads.setHover(t.x, t.y, ok ? 'ok' : 'bad');

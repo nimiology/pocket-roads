@@ -9,7 +9,7 @@ export class Hud {
   constructor(parent: HTMLElement, onSpeed: (speed: number) => void) {
     const left = document.createElement('div');
     left.className = 'hud';
-    left.innerHTML = `<svg class="pin" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" fill="#fff" stroke="#4a4740" stroke-width="2"/></svg><span class="score">0</span>`;
+    left.innerHTML = `<svg class="pin" viewBox="0 0 20 20"><circle cx="10" cy="10.8" r="8" fill="#3d3a35"/><circle cx="10" cy="9.6" r="6.4" fill="#fff"/></svg><span class="score">0</span>`;
     this.score = left.querySelector('.score')!;
 
     const right = document.createElement('div');

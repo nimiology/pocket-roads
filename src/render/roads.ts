@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Terrain } from '../sim/grid';
 import { RoadNetwork } from '../sim/roads';
+import { approachAxis } from '../sim/traffic';
 import { PALETTE } from './palette';
 
 const ROAD_W = 0.5;
@@ -9,6 +10,12 @@ const ROAD_Y = ROAD_H / 2 + 0.004;
 const BRIDGE_W = 0.62;
 /** Hills overhang their tile, so portals sit this far from the land tile's centre to stay visible. */
 const PORTAL_OFFSET = 0.25;
+/** Height of a motorway deck, and how far its ramps run from each end. */
+export const DECK_Y = 0.26;
+export const RAMP = 0.9;
+const DECK_W = 0.44;
+const ROUNDABOUT_R = 0.62;
+const LAMP_OFFSET = 0.4;
 
 const box = new THREE.BoxGeometry(1, 1, 1);
 const disc = new THREE.CylinderGeometry(0.5, 0.5, 1, 20);
@@ -21,6 +28,11 @@ export class RoadRenderer {
   readonly group = new THREE.Group();
   private meshes: THREE.InstancedMesh[] = [];
   private hover: THREE.Mesh;
+  private preview: THREE.Mesh;
+  /** Traffic-light lamps, recoloured each frame: one per road arm, at that arm's stop line. */
+  private lamps: THREE.InstancedMesh;
+  private lampInfo: { node: number; axis: 0 | 1 }[] = [];
+  private lampColors = { green: new THREE.Color('#3db58a'), amber: new THREE.Color('#f2b230'), red: new THREE.Color('#e5483a') };
 
   constructor(scene: THREE.Scene) {
     scene.add(this.group);
@@ -30,6 +42,35 @@ export class RoadRenderer {
     );
     this.hover.visible = false;
     scene.add(this.hover);
+    this.preview = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.55, depthWrite: false }));
+    this.preview.visible = false;
+    scene.add(this.preview);
+    this.lamps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.075, 12, 8), new THREE.MeshBasicMaterial(), 512);
+    for (let i = 0; i < 512; i++) this.lamps.setColorAt(i, this.lampColors.red);
+    this.lamps.count = 0;
+    this.lamps.frustumCulled = false;
+    scene.add(this.lamps);
+  }
+
+  /** Ghost of a motorway being dragged from tile `a` to point `b` (tile coords). */
+  setMotorwayPreview(a: [number, number] | null, b?: [number, number], ok?: boolean): void {
+    this.preview.visible = !!a;
+    if (!a || !b) return;
+    (this.preview.material as THREE.MeshBasicMaterial).color.set(ok ? '#ffffff' : '#e25b4b');
+    const pa = new THREE.Vector3(a[0] + 0.5, 0, a[1] + 0.5), pb = new THREE.Vector3(b[0] + 0.5, 0, b[1] + 0.5);
+    this.preview.matrix.copy(segment(pa, pb, DECK_W, DECK_Y, 0.04));
+    this.preview.matrixAutoUpdate = false;
+  }
+
+  /** Recolour traffic lights from each junction's current state. */
+  updateLights(state: (node: number) => { axis: 0 | 1; green: boolean; amber: boolean } | null): void {
+    this.lampInfo.forEach(({ node, axis }, k) => {
+      const l = state(node);
+      // An unused light rests on red for everyone; it turns green the moment a car arrives.
+      const c = !l || l.axis !== axis ? this.lampColors.red : l.green ? this.lampColors.green : l.amber ? this.lampColors.amber : this.lampColors.red;
+      this.lamps.setColorAt(k, c);
+    });
+    if (this.lamps.instanceColor) this.lamps.instanceColor.needsUpdate = true;
   }
 
   setHover(x: number, y: number, state: 'ok' | 'bad' | 'erase' | null): void {
@@ -53,6 +94,12 @@ export class RoadRenderer {
     const deck: Piece = { geo: box, color: PALETTE.bridge, shadow: true, matrices: [] };
     const rails: Piece = { geo: box, color: PALETTE.bridgeRail, shadow: true, matrices: [] };
     const portals: Piece = { geo: arch, color: PALETTE.tunnel, shadow: true, matrices: [] };
+    const rounds: Piece = { geo: disc, color: PALETTE.road, matrices: [] };
+    const islands: Piece = { geo: disc, color: PALETTE.island, shadow: true, matrices: [] };
+    const decks: Piece = { geo: box, color: PALETTE.motorway, shadow: true, matrices: [] };
+    const pillars: Piece = { geo: box, color: PALETTE.pillar, shadow: true, matrices: [] };
+    const stripes: Piece = { geo: box, color: PALETTE.parkingLine, matrices: [] };
+    const poles: Piece = { geo: box, color: PALETTE.bridgeRail, matrices: [] };
 
     const terrain = (i: number) => net.terrainAt(i);
     const center = (i: number) => {
@@ -93,7 +140,54 @@ export class RoadRenderer {
       joints.matrices.push(new THREE.Matrix4().compose(p.setY(y), new THREE.Quaternion(), new THREE.Vector3(ROAD_W, ROAD_H, ROAD_W)));
     }
 
-    for (const piece of [deck, rails, road, joints, portals]) {
+    // Junction tools.
+    const lampMatrices: THREE.Matrix4[] = [];
+    this.lampInfo = [];
+    for (const [i, sp] of net.specials) {
+      if (sp.closing) continue;
+      const p = center(i);
+      if (sp.kind === 'roundabout') {
+        rounds.matrices.push(new THREE.Matrix4().compose(p.clone().setY(ROAD_Y + 0.002), new THREE.Quaternion(), new THREE.Vector3(ROUNDABOUT_R * 2, ROAD_H, ROUNDABOUT_R * 2)));
+        islands.matrices.push(new THREE.Matrix4().compose(p.clone().setY(ROAD_Y + 0.03), new THREE.Quaternion(), new THREE.Vector3(0.46, 0.06, 0.46)));
+      } else {
+        for (const n of net.neighbors(i)) {
+          // Lamp on the kerb to the right of traffic coming in along this arm, near the stop line.
+          const [nx, ny] = net.xy(n);
+          const dir = new THREE.Vector3(nx + 0.5 - p.x, 0, ny + 0.5 - p.z).normalize();
+          const right = new THREE.Vector3(-dir.z, 0, dir.x);
+          const lp = p.clone().addScaledVector(dir, LAMP_OFFSET).addScaledVector(right, -0.3);
+          poles.matrices.push(new THREE.Matrix4().compose(lp.clone().setY(0.07), new THREE.Quaternion(), new THREE.Vector3(0.04, 0.14, 0.04)));
+          lampMatrices.push(new THREE.Matrix4().makeTranslation(lp.x, 0.17, lp.z));
+          this.lampInfo.push({ node: i, axis: approachAxis(n, i, net.grid.w) });
+        }
+      }
+    }
+    lampMatrices.forEach((m, k) => this.lamps.setMatrixAt(k, m));
+    this.lamps.count = lampMatrices.length;
+    this.lamps.instanceMatrix.needsUpdate = true;
+
+    // Motorways: ramps up from each end, a flat deck, pillars underneath.
+    for (const m of net.motorways) {
+      if (m.closing) continue;
+      const pa = center(m.a), pb = center(m.b);
+      const dir = pb.clone().sub(pa);
+      const len = dir.length();
+      dir.normalize();
+      const ra = pa.clone().addScaledVector(dir, RAMP), rb = pb.clone().addScaledVector(dir, -RAMP);
+      decks.matrices.push(beam(pa.clone().setY(ROAD_Y), ra.clone().setY(DECK_Y), DECK_W, 0.06));
+      decks.matrices.push(beam(ra.clone().setY(DECK_Y), rb.clone().setY(DECK_Y), DECK_W, 0.06));
+      decks.matrices.push(beam(rb.clone().setY(DECK_Y), pb.clone().setY(ROAD_Y), DECK_W, 0.06));
+      stripes.matrices.push(beam(ra.clone().setY(DECK_Y + 0.004), rb.clone().setY(DECK_Y + 0.004), 0.035, 0.004));
+      const n = Math.max(1, Math.round((len - 2 * RAMP) / 1.4));
+      for (let k = 0; k <= n; k++) {
+        const q = ra.clone().lerp(rb, k / n);
+        // Stop short of the deck's underside so the tops don't show through it.
+        const top = DECK_Y - 0.07;
+        pillars.matrices.push(new THREE.Matrix4().compose(q.setY(top / 2), new THREE.Quaternion(), new THREE.Vector3(0.12, top, 0.12)));
+      }
+    }
+
+    for (const piece of [deck, rails, road, joints, portals, rounds, islands, decks, stripes, pillars, poles]) {
       if (!piece.matrices.length) continue;
       const mesh = new THREE.InstancedMesh(piece.geo, new THREE.MeshLambertMaterial({ color: piece.color }), piece.matrices.length);
       piece.matrices.forEach((m, k) => mesh.setMatrixAt(k, m));
@@ -103,6 +197,17 @@ export class RoadRenderer {
       this.meshes.push(mesh);
     }
   }
+}
+
+/** A box from a to b (which may differ in height), `width` wide and `h` thick. */
+function beam(a: THREE.Vector3, b: THREE.Vector3, width: number, h: number): THREE.Matrix4 {
+  const d = b.clone().sub(a);
+  const flat = Math.hypot(d.x, d.z);
+  const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.atan2(d.z, d.x));
+  const pitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.atan2(d.y, flat));
+  const mid = a.clone().add(b).multiplyScalar(0.5);
+  // Sink the box by half its thickness so its top surface runs from a to b.
+  return new THREE.Matrix4().compose(mid.setY(mid.y - h / 2), yaw.multiply(pitch), new THREE.Vector3(d.length(), h, width));
 }
 
 /** A flat box from a to b, `width` wide, optionally offset sideways. */

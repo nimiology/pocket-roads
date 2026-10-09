@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { Grid, Terrain } from './grid';
-import { RoadNetwork } from './roads';
+import { Inventory, RoadNetwork } from './roads';
 
 /** 10x6 grid with a 2-wide vertical river at x=4..5 and a mountain at x=8, y=0..5. */
-function setup(inv = { roads: 20, bridges: 1, tunnels: 1 }) {
+function setup(inv: Partial<Inventory> = {}) {
   const g = new Grid(10, 6);
   for (let y = 0; y < 6; y++) {
     g.set(4, y, Terrain.Water);
     g.set(5, y, Terrain.Water);
     g.set(8, y, Terrain.Mountain);
   }
-  const net = new RoadNetwork(g, { ...inv });
+  const net = new RoadNetwork(g, { roads: 20, bridges: 1, tunnels: 1, roundabouts: 0, lights: 0, motorways: 0, ...inv });
   const at = (x: number, y: number) => net.idx(x, y);
   /** Draw a stroke through the given tiles; returns how many steps succeeded. */
   const stroke = (...pts: [number, number][]) => {
@@ -60,7 +60,7 @@ describe('RoadNetwork', () => {
   it('uses one bridge per water crossing regardless of length', () => {
     const { net, stroke } = setup();
     expect(stroke([2, 2], [3, 2], [4, 2], [5, 2], [6, 2], [7, 2])).toBe(6);
-    expect(net.used()).toEqual({ roads: 4, bridges: 1, tunnels: 0 });
+    expect(net.used()).toMatchObject({ roads: 4, bridges: 1, tunnels: 0 });
   });
 
   it('cannot start a second bridge without inventory', () => {
@@ -107,5 +107,39 @@ describe('RoadNetwork', () => {
     net.isBuildable = (x) => x < 2;
     expect(stroke([0, 0], [1, 0], [2, 0])).toBe(2);
     expect(net.placeTile(at(3, 3))).toBe(false);
+  });
+
+  it('places junction tools only on junctions, and refunds them once traffic clears', () => {
+    const { net, at, stroke } = setup({ roundabouts: 1, lights: 1 });
+    stroke([0, 2], [1, 2], [2, 2], [3, 2]);
+    stroke([2, 0], [2, 1], [2, 2]);
+    expect(net.placeSpecial(at(1, 2), 'light')).toBe(false); // only two links
+    expect(net.placeSpecial(at(2, 2), 'roundabout')).toBe(true);
+    expect(net.placeSpecial(at(2, 2), 'light')).toBe(false); // occupied
+    expect(net.available().roundabouts).toBe(0);
+    net.closeSpecial(at(2, 2));
+    expect(net.specialAt(at(2, 2))).toBeNull();
+    net.finishClosing(() => true);
+    expect(net.available().roundabouts).toBe(0); // still busy
+    net.finishClosing(() => false);
+    expect(net.available().roundabouts).toBe(1);
+  });
+
+  it('builds motorways between road tiles, never over mountains', () => {
+    const { net, at, stroke } = setup({ roads: 40, motorways: 2 });
+    stroke([0, 0], [0, 1]);
+    stroke([7, 1], [7, 2]);
+    stroke([9, 1], [9, 2]);
+    stroke([1, 1], [2, 1]);
+    expect(net.motorwayProblem(at(0, 1), at(2, 1))).toBe('too short');
+    expect(net.motorwayProblem(at(0, 1), at(9, 1))).toBe('crosses a mountain');
+    net.isBuildable = (x, y) => !(x === 3 && y === 1); // a building in the way
+    expect(net.motorwayProblem(at(0, 1), at(7, 1))).toBe('blocked by a building');
+    net.isBuildable = () => true;
+    expect(net.placeMotorway(at(0, 1), at(7, 1))).toBe(true); // over the river is fine
+    expect(net.available().motorways).toBe(1);
+    expect(net.motorwayNear(3.5, 1.5)).toBe(net.motorways[0]);
+    net.removeTile(at(7, 1));
+    expect(net.motorways).toHaveLength(0);
   });
 });

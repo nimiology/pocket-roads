@@ -13,6 +13,7 @@ const STEPS: Step[] = [
   { text: 'Cars pick up the white <b>pins</b> and bring them home. Each one is a point.', done: (g) => g.score >= 2 },
   { text: 'Too many pins and a <b>red ring</b> starts filling. If it closes, the game is over.' },
   { text: 'Every road tile uses one from your budget below. <b>Right-drag</b> erases roads and refunds them.' },
+  { text: 'Drag out of a house in <b>any direction</b> to turn its driveway that way.' },
   { text: 'The week dial (top right) fills up. At the end of each week you get more roads and pick an upgrade.' },
 ];
 
@@ -40,12 +41,29 @@ export class Tutorial {
     this.advance();
   }
 
+  /** One-off tip (e.g. a newly unlocked tool), shown briefly unless the tutorial is mid-way. */
+  tip(html: string, seconds = 7): void {
+    if (this.step >= 0 && this.step < STEPS.length) return;
+    this.el.querySelector('.text')!.innerHTML = html;
+    this.el.querySelector('.count')!.textContent = 'New tool';
+    (this.el.querySelector('.next') as HTMLElement).hidden = false;
+    this.el.hidden = false;
+    clearTimeout(this.tipTimer);
+    this.tipTimer = setTimeout(() => (this.el.hidden = true), seconds * 1000);
+  }
+
+  private tipTimer?: ReturnType<typeof setTimeout>;
+
   update(game: Game): void {
     const s = STEPS[this.step];
     if (s?.done?.(game)) this.advance();
   }
 
   private advance() {
+    if (this.step >= STEPS.length) {
+      this.el.hidden = true; // "Got it" on a tip
+      return;
+    }
     this.step++;
     const s = STEPS[this.step];
     if (!s) return this.finish();

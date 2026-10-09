@@ -20,6 +20,7 @@ const app = document.getElementById('app')!;
 const renderer = new GameRenderer(app);
 const roadRenderer = new RoadRenderer(renderer.scene);
 const buildingRenderer = new BuildingRenderer(renderer.scene);
+let entrancesKey = '';
 const carRenderer = new CarRenderer(renderer.scene);
 const toolbar = new Toolbar(document.body);
 const gameOver = new GameOverScreen(document.body, () => newGame(seed), () => newGame(Math.floor(Math.random() * 1e6)));
@@ -30,7 +31,7 @@ const picker = new UpgradePicker(document.body, (i) => game.chooseUpgrade(i));
 const hint = document.createElement('div');
 hint.className = 'hint';
 hint.textContent =
-  'drag road · right-drag erase · scroll zoom · middle/space-drag pan · P pause · 1/2 speed · H tutorial · O sandbox · R new map · G grow · T/B/N +roads/bridge/tunnel';
+  'drag road · drag out of a house to turn it · right-drag erase · right-click a tool to remove it · scroll zoom · middle/space-drag pan · P pause · 1/2 speed · H tutorial · O sandbox · R new map · G grow · T/B/N/Y/U/M +roads/bridge/tunnel/roundabout/light/motorway · Esc road tool';
 document.body.appendChild(hint);
 
 const params = new URLSearchParams(location.search);
@@ -42,6 +43,14 @@ let drawnRoads = -1;
 let drawnBuildings = -1;
 let shownOver = false;
 let shownStage = 0;
+let drawnTrees = '';
+/** Tools the player has been told about, so each tip shows once per game. */
+let toldTools = new Set<string>();
+const TOOL_TIPS: Record<string, string> = {
+  roundabouts: 'You got a <b>roundabout</b>! Pick it in the toolbar, then click a junction. Several cars can use it at once.',
+  lights: 'You got a <b>traffic light</b>! Pick it in the toolbar, then click a junction. It lets one direction go at a time.',
+  motorways: 'You got a <b>motorway</b>! Pick it in the toolbar, then drag between two roads. Cars only join at its ends.',
+};
 
 function newGame(newSeed: number) {
   seed = newSeed;
@@ -49,9 +58,12 @@ function newGame(newSeed: number) {
   drawnRoads = drawnBuildings = -1;
   shownOver = false;
   shownStage = 0;
+  drawnTrees = '';
+  toldTools = new Set();
   gameOver.hide();
   picker.hide();
   buildingRenderer.clear();
+  buildingRenderer.gridW = game.map.grid.w;
   renderer.setMap(game.map);
   renderer.resize();
   renderer.setBounds(game.bounds, true);
@@ -76,9 +88,15 @@ const camera = new CameraControls(
   () => renderer.fitHeight(game.map.stages.at(-1)!) * 1.1,
   () => ({ w: game.map.grid.w, h: game.map.grid.h }),
 );
-new RoadTool(renderer, roadRenderer, () => game.net, () => camera.isPanning, (i) => {
-  const b = game.buildings.at(i);
-  return b ? b.access : i;
+new RoadTool(renderer, roadRenderer, () => game.net, () => camera.isPanning, {
+  tool: () => toolbar.selected,
+  toolSpent: () => toolbar.select('road'),
+  houseAt: (i) => {
+    const b = game.buildings.at(i);
+    return b?.kind === 'house' ? b : undefined;
+  },
+  strokeStart: (i) => game.buildings.at(i)?.access ?? i,
+  turnHouse: (h, dir) => game.turnHouse(h, dir),
 });
 
 window.addEventListener('keydown', (e) => {
@@ -91,13 +109,15 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.key === 'p') setSpeed(0);
   if (e.key === 'h') tutorial.start(true);
+  if (e.key === 'Escape') toolbar.select('road');
   if (e.key === 'o') game.sandbox = !game.sandbox;
   if (['1', '2'].includes(e.key)) setSpeed(Number(e.key));
-  // Dev shortcuts until weekly upgrades exist.
-  if (e.key === 't') game.net.inventory.roads += 10;
-  if (e.key === 'b') game.net.inventory.bridges += 1;
-  if (e.key === 'n') game.net.inventory.tunnels += 1;
-  if ('tbn'.includes(e.key)) game.net.version++;
+  // Dev shortcuts for testing tools without waiting for upgrades.
+  const dev: Record<string, keyof typeof game.net.inventory> = { t: 'roads', b: 'bridges', n: 'tunnels', y: 'roundabouts', u: 'lights', m: 'motorways' };
+  if (dev[e.key]) {
+    game.net.inventory[dev[e.key]] += e.key === 't' ? 10 : 1;
+    game.net.version++;
+  }
 });
 
 window.addEventListener('resize', () => {
@@ -137,14 +157,31 @@ renderer.renderer.setAnimationLoop((now) => {
       acc -= SIM_DT;
     }
   }
+  const treesKey = `${seed}:${game.net.version}:${game.buildings.houses.length}:${game.buildings.dests.length}`;
+  if (treesKey !== drawnTrees) {
+    drawnTrees = treesKey;
+    // Trees give way to anything built on their tile (or a driveway's access tile).
+    renderer.syncTrees((i) => !game.net.hasTile(i) && !game.buildings.isOccupied(i) && !game.buildings.isAccess(i));
+  }
   if (game.net.version !== drawnRoads) {
     drawnRoads = game.net.version;
     roadRenderer.rebuild(game.net);
-    toolbar.update(game.net.available());
+    toolbar.update(game.net.available(), game.net.inventory);
+    for (const k of Object.keys(TOOL_TIPS)) {
+      if (!toldTools.has(k) && game.net.inventory[k as keyof typeof game.net.inventory] > 0) {
+        toldTools.add(k);
+        tutorial.tip(TOOL_TIPS[k]);
+      }
+    }
   }
   if (game.buildings.version !== drawnBuildings) {
     drawnBuildings = game.buildings.version;
     buildingRenderer.sync(game.buildings);
+  }
+  const ek = `${treesKey}:${drawnBuildings}`;
+  if (ek !== entrancesKey) {
+    entrancesKey = ek;
+    buildingRenderer.updateEntrances((i) => game.net.hasTile(i));
   }
   if (game.stage !== shownStage) {
     shownStage = game.stage;
@@ -160,6 +197,7 @@ renderer.renderer.setAnimationLoop((now) => {
     gameOver.show(game.score, game.over.time);
   }
   tutorial.update(game);
+  roadRenderer.updateLights((i) => game.traffic.lightAt(i, game.time));
   carRenderer.update(game);
   updateHud();
   renderer.update(dt);

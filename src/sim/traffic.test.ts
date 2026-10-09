@@ -54,4 +54,26 @@ describe('Traffic', () => {
     const heavy = scoreAtMinute.slice(5);
     for (let i = 1; i < heavy.length; i++) expect(heavy[i]).toBeGreaterThan(heavy[i - 1]);
   });
+
+  it('never strands cars at traffic lights or roundabouts, even on adjacent junctions', () => {
+    for (const kind of ['light', 'roundabout'] as const) {
+      const game = new Game(generateMap(7));
+      game.sandbox = true;
+      Object.assign(game.net.inventory, { roads: 600, lights: 99, roundabouts: 99 });
+      let lastMinute = 0;
+      for (let step = 0; step < 60 * 420; step++) {
+        if (step % 30 === 0) {
+          autoConnect(game);
+          for (const i of [...game.net.adj.keys()]) game.net.placeSpecial(i, kind);
+        }
+        if (game.upgrades) game.chooseUpgrade(0);
+        if (step === 60 * 360) lastMinute = game.score;
+        game.update(1 / 60);
+      }
+      expect(game.net.specials.size).toBeGreaterThan(5);
+      expect(game.cars.filter((c) => c.waitingSince < game.time - 20)).toHaveLength(0);
+      expect(game.score - lastMinute).toBeGreaterThan(20);
+    }
+  });
 });
+

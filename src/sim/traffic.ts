@@ -10,6 +10,32 @@ const ACCEL = 3;
 const REQUEST_DIST = 0.1;
 /** After a car with another movement has waited this long, no more cars may tag along. */
 const PLATOON_PATIENCE = 1;
+/** Speed multiplier on motorway lanes. */
+export const MOTORWAY_SPEED = 1.8;
+/** Cars allowed inside a roundabout at once, any direction. */
+export const ROUNDABOUT_CAP = 3;
+/** Traffic-light timing (seconds): shortest green, longest green while the other axis waits, all-red gap. */
+export const LIGHT_MIN_GREEN = 1.5;
+export const LIGHT_MAX_GREEN = 7;
+export const LIGHT_CLEAR = 0.7;
+/** Cars this close to a light's stop line count as waiting for it. */
+const LIGHT_DETECT = 0.8;
+
+/** One junction's light: which axis has green, since when, and whether it's in the all-red gap. */
+export interface Light {
+  axis: 0 | 1;
+  since: number;
+  /** All-red until this time (switch pending), or -Infinity. */
+  clearUntil: number;
+}
+
+/** Which light phase a car coming from a into b belongs to: 0 = east–west, 1 = north–south. */
+export function approachAxis(a: number, b: number, w: number): 0 | 1 {
+  const dx = (b % w) - (a % w), dy = Math.floor(b / w) - Math.floor(a / w);
+  if (Math.abs(dx) !== Math.abs(dy)) return Math.abs(dx) > Math.abs(dy) ? 0 : 1;
+  return dx * dy > 0 ? 0 : 1;
+}
+
 
 export interface Car {
   id: number;
@@ -48,13 +74,33 @@ export interface TrafficHooks {
  * Lane-based car movement: cars keep a gap to the car ahead in their lane,
  * take turns through junctions (nodes with 3+ links), only enter a junction when
  * their exit lane has room, and reserve a parking spot before turning in.
+ * Roundabouts admit several cars at once; traffic lights admit a whole axis at a time.
  */
 export class Traffic {
   private locks = new Map<number, Lock>();
+  /** Traffic-light state per junction, created when the first car arrives. */
+  readonly lights = new Map<number, Light>();
   /** Cars per directed edge, rebuilt each step. */
   private lanes = new Map<number, Car[]>();
 
-  constructor(private graph: DriveGraph, private tileCount: number, private speed: number) {}
+  constructor(
+    private graph: DriveGraph,
+    private tileCount: number,
+    private speed: number,
+    private gridW: number,
+    /** Active roundabout or light on a junction tile. */
+    private specialAt: (i: number) => 'roundabout' | 'light' | null = () => null,
+  ) {}
+
+  /** Cars currently holding junction `node`. */
+  holders(node: number): number {
+    return this.locks.get(node)?.holders.size ?? 0;
+  }
+
+  /** Whether any car is on either lane of the link a–b. */
+  linkBusy(a: number, b: number): boolean {
+    return this.carsOn(a, b).length > 0 || this.carsOn(b, a).length > 0;
+  }
 
   private laneKey(a: number, b: number) {
     return a * this.tileCount + b;
@@ -70,9 +116,57 @@ export class Traffic {
 
   step(cars: Car[], dt: number, now: number, hooks: TrafficHooks): void {
     this.indexLanes(cars);
+    this.updateLights(now);
     // Longest-waiting cars get first claim on junctions and spots.
     const order = cars.filter((c) => c.state !== 'parked').sort((a, b) => a.waitingSince - b.waitingSince || a.id - b.id);
     for (const car of order) this.advance(car, dt, now, hooks);
+  }
+
+  /**
+   * Demand-actuated lights: green stays while it's being used, and flips (after an all-red gap)
+   * once the other axis has cars waiting and the green axis is idle or has had its maximum.
+   */
+  private updateLights(now: number) {
+    for (const [node, light] of this.lights) {
+      if (this.specialAt(node) !== 'light') {
+        this.lights.delete(node);
+        continue;
+      }
+      if (light.clearUntil > -Infinity) {
+        // Switch once the gap has passed and the box is empty.
+        if (now >= light.clearUntil && this.holders(node) === 0) {
+          light.axis = (1 - light.axis) as 0 | 1;
+          light.since = now;
+          light.clearUntil = -Infinity;
+        }
+        continue;
+      }
+      const demand = this.lightDemand(node);
+      const green = now - light.since;
+      const otherWaiting = demand[1 - light.axis] > 0;
+      if (otherWaiting && green >= LIGHT_MIN_GREEN && (demand[light.axis] === 0 || green >= LIGHT_MAX_GREEN)) {
+        light.clearUntil = now + LIGHT_CLEAR;
+      }
+    }
+  }
+
+  /** Cars approaching junction `node` on each axis, not yet through it. */
+  private lightDemand(node: number): [number, number] {
+    const out: [number, number] = [0, 0];
+    for (const a of this.graph.neighbors(node)) {
+      const len = this.graph.length(a, node);
+      for (const c of this.carsOn(a, node)) {
+        if (!c.locks.has(node) && c.t >= len - STOP - LIGHT_DETECT && c.path[c.path.length - 1] !== node) out[approachAxis(a, node, this.gridW)]++;
+      }
+    }
+    return out;
+  }
+
+  /** Light at a junction for display: green axis, or null during the all-red gap / before first use. */
+  lightAt(node: number, now: number): { axis: 0 | 1; green: boolean; amber: boolean } | null {
+    const l = this.lights.get(node);
+    if (!l) return null;
+    return { axis: l.axis, green: l.clearUntil === -Infinity, amber: l.clearUntil > -Infinity && now < l.clearUntil };
   }
 
   private indexLanes(cars: Car[]) {
@@ -109,7 +203,7 @@ export class Traffic {
       if (o !== car && (o.t > car.t || (o.t === car.t && o.id < car.id))) best = Math.min(best, o.t - car.t);
     }
     if (best === Infinity && car.seg + 2 < car.path.length) {
-      const len = this.graph.cost(a, b);
+      const len = this.graph.length(a, b);
       const c = car.path[car.seg + 2];
       for (const o of this.carsOn(b, c)) best = Math.min(best, len - car.t + o.t);
     }
@@ -118,7 +212,7 @@ export class Traffic {
 
   private advance(car: Car, dt: number, now: number, hooks: TrafficHooks) {
     const a = car.path[car.seg], b = car.path[car.seg + 1];
-    const len = this.graph.cost(a, b);
+    const len = this.graph.length(a, b);
     const last = car.seg + 1 === car.path.length - 1;
     let allowed = this.gapAhead(car);
 
@@ -133,14 +227,15 @@ export class Traffic {
       }
     }
 
-    car.speed = Math.min(this.speed, car.speed + ACCEL * dt);
+    const top = this.speed * (len > 1.5 ? MOTORWAY_SPEED : 1);
+    car.speed = Math.min(top, car.speed + ACCEL * dt);
     const move = Math.max(0, Math.min(car.speed * dt, allowed));
     if (move < car.speed * dt) car.speed = move / dt;
     car.t += move;
 
     // Cross into following segments.
     while (car.seg < car.path.length - 1) {
-      const segLen = this.graph.cost(car.path[car.seg], car.path[car.seg + 1]);
+      const segLen = this.graph.length(car.path[car.seg], car.path[car.seg + 1]);
       if (car.t < segLen - 1e-9) break;
       if (car.seg + 1 === car.path.length - 1) {
         car.t = segLen;
@@ -159,16 +254,33 @@ export class Traffic {
    */
   private clearToPass(car: Car, now: number): boolean {
     const a = car.path[car.seg], b = car.path[car.seg + 1], c = car.path[car.seg + 2];
-    const intoParking = car.state === 'toDest' && car.seg + 2 === car.path.length - 1 && c === car.dest.door;
+    const intoParking = car.state === 'toDest' && car.seg + 2 === car.path.length - 1 && car.dest.parkingTiles.includes(c);
     if (intoParking && car.spot < 0 && freeSpot(car.dest) < 0) return false;
 
     if (this.isJunction(b) && !car.locks.has(b)) {
       const lock = this.locks.get(b) ?? { holders: new Set<Car>(), movement: '', contestedSince: Infinity };
-      const mv = `${a}>${c}`;
       const free = lock.holders.size === 0;
       // Don't block the box: enter only if we can get all the way out onto the exit lane.
       if (!intoParking && !this.canClearJunction(b, c, lock.holders.size)) return false;
       this.locks.set(b, lock);
+      const special = this.specialAt(b);
+      if (special === 'roundabout') {
+        // Yield to cars already circulating, but let several share it whatever their direction.
+        if (lock.holders.size >= ROUNDABOUT_CAP) return false;
+        return this.grant(car, b, lock, intoParking);
+      }
+      if (special === 'light') {
+        const axis = approachAxis(a, b, this.gridW);
+        let light = this.lights.get(b);
+        // An idle light turns green for whoever arrives first.
+        if (!light) this.lights.set(b, (light = { axis, since: now, clearUntil: -Infinity }));
+        const mv = `axis${axis}`;
+        // Green axis flows freely once the other axis has cleared the box.
+        if (axis !== light.axis || light.clearUntil > -Infinity || (!free && lock.movement !== mv)) return false;
+        lock.movement = mv;
+        return this.grant(car, b, lock, intoParking);
+      }
+      const mv = `${a}>${c}`;
       const tagAlong = !free && lock.movement === mv && now - lock.contestedSince < PLATOON_PATIENCE;
       if (!free && !tagAlong) {
         if (lock.movement !== mv && lock.contestedSince === Infinity) lock.contestedSince = now;
@@ -178,12 +290,19 @@ export class Traffic {
         lock.movement = mv;
         lock.contestedSince = Infinity;
       }
+      return this.grant(car, b, lock, intoParking);
+    }
+    return this.grant(car, b, null, intoParking);
+  }
+
+  /** Let the car through node b: take the junction lock if any, and its parking spot if turning in. */
+  private grant(car: Car, b: number, lock: Lock | null, intoParking: boolean): boolean {
+    if (lock) {
       lock.holders.add(car);
       car.locks.add(b);
     }
-
     if (intoParking && car.spot < 0) {
-      car.spot = freeSpot(car.dest);
+      car.spot = freeSpot(car.dest, car.dest.parkingTiles.indexOf(car.path[car.path.length - 1]));
       car.dest.spots[car.spot] = car.id;
     }
     car.waitingSince = Infinity;
@@ -223,7 +342,9 @@ export class Traffic {
   }
 }
 
-export function freeSpot(d: Destination): number {
-  for (let i = 0; i < PARKING_SPOTS; i++) if (d.spots[i] === null) return i;
+/** A free spot, preferring the two bays on parking tile `tile` (0 or 1) where the car drives in. */
+export function freeSpot(d: Destination, tile = 0): number {
+  const order = tile === 1 ? [2, 3, 0, 1] : [0, 1, 2, 3];
+  for (const i of order.slice(0, PARKING_SPOTS)) if (d.spots[i] === null) return i;
   return -1;
 }

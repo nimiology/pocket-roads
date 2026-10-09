@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { CAPACITY, HOUSE_CARS } from './buildings';
+import { CAPACITY, DIRS4, HOUSE_CARS } from './buildings';
 import { CONFIG, Game } from './game';
 import { Grid } from './grid';
 import { MapData, generateMap } from './mapgen';
-import { MIN_GAP } from './traffic';
+import { MIN_GAP, approachAxis } from './traffic';
 
 function flatMap(seed = 1): MapData {
   return { seed, grid: new Grid(30, 20), stages: [{ x0: 0, y0: 0, x1: 30, y1: 20 }] };
@@ -136,6 +136,60 @@ describe('Game', () => {
     game.chooseUpgrade(1);
     expect(game.week).toBe(2);
     expect(game.stage).toBe(1);
+  });
+
+  it('routes over a motorway and drives it faster', () => {
+    const game = new Game({ seed: 1, grid: new Grid(30, 20), stages: [{ x0: 0, y0: 0, x1: 30, y1: 20 }] });
+    const { net } = game;
+    net.inventory.roads = 500;
+    net.inventory.motorways = 1;
+    // A long road along a row no building sits on, then a motorway over it.
+    const row = [...Array(30).keys()].find((y) => [...Array(30).keys()].every((x) => !game.buildings.isOccupied(net.idx(x, y)) && !game.buildings.isAccess(net.idx(x, y))))!;
+    const a = net.idx(2, row), b = net.idx(20, row);
+    net.placeTile(a);
+    for (let x = 3; x <= 20; x++) net.connect(net.idx(x - 1, row), net.idx(x, row));
+    expect(game.graph.path(a, b)).toHaveLength(19);
+    expect(net.placeMotorway(a, b)).toBe(true);
+    expect(game.graph.path(a, b)).toEqual([a, b]);
+    // Closing it keeps the lane for cars already on it but stops new routes.
+    net.closeMotorway(net.motorways[0]);
+    expect(game.graph.path(a, b)).toHaveLength(19);
+    expect(game.graph.hasLane(a, b)).toBe(true);
+  });
+
+  it('opens destination lots on several sides, and cars use any connected entrance', () => {
+    const game = new Game(flatMap(1));
+    game.net.inventory.roads = 500;
+    const d = game.buildings.dests[0];
+    expect(d.entrances.length).toBeGreaterThanOrEqual(3);
+    const sides = new Set(d.entrances.map((e) => e.access - e.door));
+    expect(sides.size).toBe(3); // front plus both ends
+    // Connect only through a side entrance, never the main one.
+    const side = d.entrances.find((e) => e.access - e.door !== d.access - d.door)!;
+    for (const h of game.buildings.houses) connect(game, h.access, side.access);
+    expect(game.net.hasTile(d.access)).toBe(false);
+    run(game, 60, () => checkInvariants(game));
+    expect(game.score).toBeGreaterThan(2);
+  });
+
+  it('turns a house to face a new road', () => {
+    const game = new Game(flatMap(6));
+    const h = game.buildings.houses[0];
+    const dir = DIRS4.find((d) => (d[0] !== h.dir[0] || d[1] !== h.dir[1]) && game.buildings.isAccessOk(h.x + d[0], h.y + d[1], game.bounds))!;
+    const old = h.access;
+    expect(game.turnHouse(h, dir)).toBe(true);
+    expect(h.access).toBe(game.net.idx(h.x + dir[0], h.y + dir[1]));
+    expect(game.buildings.byAccess.get(old)?.includes(h) ?? false).toBe(false);
+    expect(game.buildings.byAccess.get(h.access)).toContain(h);
+    // Roads at the new access tile now reach the house.
+    game.net.placeTile(h.access);
+    expect(game.graph.neighbors(h.tile)).toEqual([h.access]);
+  });
+
+  it('classifies light approaches by axis', () => {
+    const w = 30;
+    expect(approachAxis(5, 6, w)).toBe(0);
+    expect(approachAxis(5, 5 + w, w)).toBe(1);
   });
 
   it('keeps traffic rules on a busy network', () => {

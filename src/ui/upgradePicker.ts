@@ -2,7 +2,9 @@ import { Upgrade } from '../sim/game';
 import { Inventory } from '../sim/roads';
 import { ICONS } from './toolbar';
 
-const NAMES: Record<keyof Inventory, string> = { roads: 'Roads', bridges: 'Bridge', tunnels: 'Tunnel' };
+const NAMES: Record<keyof Inventory, string> = {
+  roads: 'Roads', bridges: 'Bridge', tunnels: 'Tunnel', roundabouts: 'Roundabout', lights: 'Traffic light', motorways: 'Motorway',
+};
 
 /** Week's-end card: one free road gift, then a choice between two packages. */
 export class UpgradePicker {
