@@ -7,7 +7,8 @@ export const MOTORWAY_COST = 0.35;
 /**
  * Driving graph: road edges plus driveways joining each building's endpoint
  * (house tile or destination door) to its access tile when a road is there.
- * Building endpoints have only their driveway, so routes can't pass through them.
+ * Houses have only their driveway, so routes can't pass through them; a destination's two
+ * parking tiles are joined, so cars can drive in one entrance of a lot and out another.
  * Open motorways add a long edge between their two ends.
  */
 export class DriveGraph {
@@ -26,6 +27,7 @@ export class DriveGraph {
         if (this.net.hasTile(b.access)) out.push(b.access);
       } else {
         for (const e of b.entrances) if (e.door === i && this.net.hasTile(e.access)) out.push(e.access);
+        for (const t of b.parkingTiles) if (t !== i) out.push(t);
       }
       return out;
     }
