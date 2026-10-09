@@ -46,6 +46,7 @@ Houses and destinations pop up around the map, each with a colour. Cars from a h
 | Middle-drag / Space + drag | Pan |
 | `P` / `1` / `2` | Pause / normal speed / fast |
 | `H` | Replay the tutorial |
+| `L` | Switch day / night |
 | `Esc` | Back to the road tool |
 
 ## Features
@@ -56,6 +57,7 @@ Houses and destinations pop up around the map, each with a colour. Cars from a h
 - Golden glass motorways that branch off the road on slip ramps.
 - Parking lots that you can enter from three sides.
 - Generated maps with rivers, lakes and mountains, built from a seed (`?seed=123`).
+- A colour theme per city (Sunny, Snowy, Meadow, Blossom), plus a day/night switch on the title screen or with `L`.
 - Generative ambient music and sound effects, all synthesized in the browser. No audio files.
 - A first-play tutorial, a local high score, and a title screen.
 

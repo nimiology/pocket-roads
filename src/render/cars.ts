@@ -64,13 +64,17 @@ export class CarRenderer {
     const one = new THREE.Vector3(1, 1, 1), pos = new THREE.Vector3();
     let n = 0;
     const isRoundabout = (i: number) => game.net.specialAt(i) === 'roundabout';
+    const isMotorway = (a: number, b: number) => game.net.motorways.some((m) => (m.a === a && m.b === b) || (m.a === b && m.b === a));
     const seen = new Set<number>();
     for (const car of game.cars) {
       if (n >= MAX_CARS) break;
       seen.add(car.id);
-      let p = carPose(car, game.map.grid.w, isRoundabout);
+      let p = carPose(car, game.map.grid.w, isRoundabout, isMotorway);
       const last = car.path.length - 2;
       const segLength = car.seg <= last ? game.graph.length(car.path[car.seg], car.path[car.seg + 1]) : 1;
+      // Once a home-bound car is past its first lane it has left the lot for good. Forget the bay,
+      // so a reroute (which restarts the path at segment 0) can't glide it back from there.
+      if (car.state !== 'parked' && (car.state !== 'toHome' || car.seg > 0)) this.lastBay.delete(car.id);
       if (car.state === 'parked') this.lastBay.set(car.id, p);
       else if (car.state === 'toDest' && car.seg === last && car.spot >= 0) {
         // Glide from the lot entrance into the reserved bay.
@@ -96,7 +100,11 @@ export class CarRenderer {
   }
 }
 
-export function carPose(car: Car, gridW: number, isRoundabout: (node: number) => boolean = () => false): CarPose {
+export function carPose(
+  car: Car, gridW: number,
+  isRoundabout: (node: number) => boolean = () => false,
+  isMotorway: (a: number, b: number) => boolean = () => false,
+): CarPose {
   const center = (i: number) => [(i % gridW) + 0.5, Math.floor(i / gridW) + 0.5];
   if (car.state === 'parked') return bayPose(car.dest, car.spot);
   const { path, seg, t } = car;
@@ -117,8 +125,9 @@ export function carPose(car: Car, gridW: number, isRoundabout: (node: number) =>
   } else {
     pose = lanePoint(node(seg), node(seg + 1), t);
   }
-  // Only motorway links are longer than a diagonal step: climb the ramps onto the deck.
-  if (len > 1.5) {
+  // On a motorway link: climb the ramps onto the deck. (Checked explicitly, not by length, so
+  // no other long hop ever lifts a car into the air.)
+  if (isMotorway(path[seg], path[seg + 1])) {
     pose.lift = deckHeight(t, len);
     // Follow the deck as it swings off to one side of the road and back.
     const a = node(seg), b = node(seg + 1);
