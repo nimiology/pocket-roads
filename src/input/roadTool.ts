@@ -12,6 +12,8 @@ const DIAGONAL_SLACK = 0.4;
 export class RoadTool {
   private mode: 'draw' | 'erase' | null = null;
   private current = -1;
+  /** The stroke's first tile isn't placed until the drag reaches a neighbour, so a tap builds nothing. */
+  private startPending = false;
 
   constructor(
     private r: GameRenderer,
@@ -43,9 +45,13 @@ export class RoadTool {
     if (e.button === 2) {
       this.mode = 'erase';
       net.removeTile(i);
-    } else if (net.placeTile(i)) {
-      this.mode = 'draw';
-      this.current = i;
+    } else {
+      const [sx, sy] = net.xy(i);
+      if (net.hasTile(i) || (net.isBuildable(sx, sy) && !net.isSpanTile(i))) {
+        this.mode = 'draw';
+        this.current = i;
+        this.startPending = !net.hasTile(i);
+      }
     }
     this.updateHover(e);
   };
@@ -77,7 +83,14 @@ export class RoadTool {
       const nx = cx + sx, ny = cy + sy;
       if (!net.grid.contains(nx, ny)) return;
       const next = net.idx(nx, ny);
-      if (!net.connect(this.current, next)) return;
+      const placedStart = this.startPending;
+      if (placedStart && !net.placeTile(this.current)) return;
+      if (!net.connect(this.current, next)) {
+        // Don't leave a lone start tile behind if the very first step was refused.
+        if (placedStart) net.removeTile(this.current);
+        return;
+      }
+      this.startPending = false;
       this.current = next;
     }
   }
