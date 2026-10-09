@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://nimiology.github.io/pocket-roads/sitemap.xml
+Sitemap: https://pocket-roads.vercel.app/sitemap.xml
