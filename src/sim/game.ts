@@ -30,7 +30,23 @@ export const CONFIG = {
   /** Pins pile up to this many past capacity; extra demand is dropped. */
   maxExtraPins: 6,
   startingInventory: { roads: 30, bridges: 1, tunnels: 1 } as Inventory,
+  /** Game seconds per week at 1x. */
+  weekSeconds: 150,
+  /** Road tiles granted at every week's end, before the upgrade pick. */
+  weeklyRoads: 15,
+  /** The playable area grows after every this many weeks. */
+  growEveryWeeks: 2,
 };
+
+/** One upgrade choice: some road tiles plus at most one special tool. */
+export type Upgrade = Partial<Inventory>;
+
+/** Specials offered in weekly upgrades, each bundled with a few road tiles. */
+const UPGRADE_POOL: Upgrade[] = [
+  { bridges: 1, roads: 10 },
+  { tunnels: 1, roads: 10 },
+  { roads: 30 },
+];
 
 export class Game {
   readonly net: RoadNetwork;
@@ -46,6 +62,10 @@ export class Game {
   over: { dest: Destination; time: number } | null = null;
   /** Rings still fill, but never end the game (stress tests, dev play). */
   sandbox = false;
+  /** Weeks completed; the current week is `week + 1`. */
+  week = 0;
+  /** Choices waiting for the player at week's end; the sim holds still until one is picked. */
+  upgrades: Upgrade[] | null = null;
   private rng: Rng;
   private nextCarId = 0;
   private houseTimer = 0;
@@ -78,9 +98,15 @@ export class Game {
     return true;
   }
 
+  /** Progress through the current week, 0..1. */
+  get weekProgress(): number {
+    return (this.time - this.week * CONFIG.weekSeconds) / CONFIG.weekSeconds;
+  }
+
   update(dt: number): void {
-    if (this.over) return;
+    if (this.over || this.upgrades) return;
     this.time += dt;
+    if (this.weekProgress >= 1) this.endWeek();
     if (this.net.version !== this.seenNetVersion) {
       this.seenNetVersion = this.net.version;
       this.reroute();
@@ -95,6 +121,40 @@ export class Game {
       this.dispatch();
     }
     this.moveCars(dt);
+  }
+
+  // ---- weeks ----------------------------------------------------------------
+
+  private endWeek() {
+    this.week++;
+    this.addToInventory({ roads: CONFIG.weeklyRoads });
+    if (this.week % CONFIG.growEveryWeeks === 0) this.grow();
+    // Two different packages; bridges only tempt if the map has water to cross, and so on.
+    const pool = UPGRADE_POOL.filter((u) => !u.bridges || this.hasTerrain(Terrain.Water))
+      .filter((u) => !u.tunnels || this.hasTerrain(Terrain.Mountain));
+    const picks: Upgrade[] = [];
+    while (picks.length < 2 && pool.length) picks.push(pool.splice(Math.floor(this.rng() * pool.length), 1)[0]);
+    this.upgrades = picks;
+  }
+
+  /** Take one of the offered upgrades and resume the clock. */
+  chooseUpgrade(i: number): void {
+    const u = this.upgrades?.[i];
+    if (!u) return;
+    this.addToInventory(u);
+    this.upgrades = null;
+  }
+
+  private addToInventory(u: Upgrade) {
+    const inv = this.net.inventory;
+    for (const k of Object.keys(u) as (keyof Inventory)[]) inv[k] += u[k] ?? 0;
+    this.net.version++;
+  }
+
+  private hasTerrain(t: Terrain): boolean {
+    const b = this.bounds, g = this.map.grid;
+    for (let y = b.y0; y < b.y1; y++) for (let x = b.x0; x < b.x1; x++) if (g.get(x, y) === t) return true;
+    return false;
   }
 
   // ---- spawning -------------------------------------------------------------

@@ -5,15 +5,30 @@ body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, sans-serif; color: 
 #app canvas { display: block; }
 
 .hud {
-  position: fixed; top: 10px; left: 12px; z-index: 1; pointer-events: none;
-  font-size: 12px; display: flex; gap: 10px; align-items: baseline;
+  position: fixed; top: 14px; left: 16px; z-index: 1; pointer-events: none;
+  display: flex; gap: 8px; align-items: center;
 }
-.hud .title { font-weight: 700; font-size: 13px; letter-spacing: 0.02em; }
-.hud .meta { opacity: 0.7; }
+.hud .pin { width: 20px; height: 20px; }
+.hud .score { font-weight: 800; font-size: 26px; font-variant-numeric: tabular-nums; }
+.hud-right { position: fixed; top: 12px; right: 14px; z-index: 1; display: flex; gap: 10px; align-items: center; }
+.hud-right .sandbox { padding: 4px 9px; border-radius: 8px; background: #e5483a; color: #fff; font-weight: 800; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+.hud-right .sandbox[hidden] { display: none; }
+.hud-right .week { display: flex; gap: 6px; align-items: center; font-weight: 700; font-size: 13px; }
+.hud-right .week svg { width: 22px; height: 22px; transform: rotate(-90deg); }
+.hud-right .week circle { fill: none; stroke-width: 4; }
+.hud-right .week .track { stroke: rgba(74, 71, 64, 0.15); }
+.hud-right .week .fill { stroke: #4a4740; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.hud-right .speed { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: rgba(250, 247, 240, 0.92); box-shadow: 0 2px 10px rgba(60, 50, 30, 0.12); }
+.hud-right button { width: 32px; height: 28px; border: none; border-radius: 9px; background: none; cursor: pointer; display: grid; place-items: center; }
+.hud-right button svg { width: 16px; height: 16px; fill: #4a4740; opacity: 0.45; }
+.hud-right button:hover svg { opacity: 0.8; }
+.hud-right button.on { background: #4a4740; }
+.hud-right button.on svg { fill: #faf7f0; opacity: 1; }
 .hint {
   position: fixed; bottom: 8px; left: 12px; z-index: 1; pointer-events: none;
   font-size: 11px; opacity: 0.55;
 }
+.hint::before { content: attr(data-meta) ' · '; }
 
 .toolbar {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); z-index: 1;
@@ -45,3 +60,41 @@ body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, sans-serif; color: 
 .game-over button:last-child { background: #e3ddcf; color: #4a4740; }
 .game-over button:hover { filter: brightness(1.08); }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.upgrades {
+  position: fixed; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
+  background: rgba(233, 227, 213, 0.45); animation: fade-in 0.3s ease both;
+}
+.upgrades[hidden] { display: none; }
+.upgrades .card {
+  padding: 20px 24px; border-radius: 18px; text-align: center;
+  background: rgba(250, 247, 240, 0.97); box-shadow: 0 6px 30px rgba(60, 50, 30, 0.18);
+}
+.upgrades .label { font-weight: 800; font-size: 18px; }
+.upgrades .sub { font-size: 12px; opacity: 0.6; margin-top: 2px; }
+.upgrades .choices { display: flex; gap: 12px; margin-top: 16px; }
+.upgrades .choice {
+  font: inherit; color: inherit; width: 132px; padding: 16px 10px 12px; border: 2px solid transparent; border-radius: 14px;
+  background: #efe9dc; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.upgrades .choice:hover { border-color: #4a4740; }
+.upgrades .choice .main { display: flex; flex-direction: column; align-items: center; gap: 4px; font-weight: 800; font-size: 16px; }
+.upgrades .choice .main svg { width: 44px; height: 44px; }
+.upgrades .choice .extra { display: flex; align-items: center; gap: 5px; font-weight: 700; font-size: 13px; opacity: 0.75; }
+.upgrades .choice .extra svg { width: 16px; height: 16px; }
+
+.tutorial {
+  position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 1;
+  width: min(360px, calc(100vw - 32px)); padding: 12px 14px 10px; border-radius: 14px;
+  background: #4a4740; color: #faf7f0; font-size: 14px; line-height: 1.4;
+  box-shadow: 0 4px 18px rgba(60, 50, 30, 0.25); animation: pop-in 0.35s ease both;
+}
+.tutorial[hidden] { display: none; }
+.tutorial b { color: #ffd98a; }
+.tutorial .row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.tutorial .count { flex: 1; font-size: 11px; opacity: 0.55; }
+.tutorial button { font: inherit; font-size: 12px; font-weight: 700; border: none; border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+.tutorial .skip { background: none; color: #faf7f0; opacity: 0.6; }
+.tutorial .next { background: #faf7f0; color: #4a4740; }
+.tutorial .next[hidden] { display: none; }
+@keyframes pop-in { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CAPACITY, HOUSE_CARS } from './buildings';
 import { CONFIG, Game } from './game';
 import { Grid } from './grid';
-import { MapData } from './mapgen';
+import { MapData, generateMap } from './mapgen';
 import { MIN_GAP } from './traffic';
 
 function flatMap(seed = 1): MapData {
@@ -42,8 +42,10 @@ function checkInvariants(game: Game) {
   }
 }
 
-function run(game: Game, seconds: number, each?: () => void) {
+/** Advance the sim; `pick` takes the first upgrade whenever a week ends. */
+function run(game: Game, seconds: number, each?: () => void, pick = true) {
   for (let t = 0; t < seconds; t += 1 / 30) {
+    if (pick && game.upgrades) game.chooseUpgrade(0);
     game.update(1 / 30);
     each?.();
   }
@@ -111,6 +113,29 @@ describe('Game', () => {
     expect(game.over).toBeNull();
     expect(d.pins).toBeLessThanOrEqual(CAPACITY[d.shape]);
     expect(d.overflow).toBe(0);
+  });
+
+  it('ends each week with roads, an upgrade pick and periodic growth', () => {
+    const game = new Game(generateMap(4));
+    game.sandbox = true;
+    const roads = game.net.inventory.roads;
+    run(game, CONFIG.weekSeconds + 1, undefined, false);
+    expect(game.week).toBe(1);
+    expect(game.upgrades).toHaveLength(2);
+    expect(game.upgrades![0]).not.toEqual(game.upgrades![1]);
+    // The clock holds while the player decides.
+    const t = game.time;
+    run(game, 10, undefined, false);
+    expect(game.time).toBe(t);
+    const pick = game.upgrades![0];
+    game.chooseUpgrade(0);
+    expect(game.upgrades).toBeNull();
+    expect(game.net.inventory.roads).toBe(roads + CONFIG.weeklyRoads + (pick.roads ?? 0));
+    expect(game.stage).toBe(0);
+    run(game, CONFIG.weekSeconds, undefined, false);
+    game.chooseUpgrade(1);
+    expect(game.week).toBe(2);
+    expect(game.stage).toBe(1);
   });
 
   it('keeps traffic rules on a busy network', () => {

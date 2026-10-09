@@ -5,10 +5,13 @@ import { BuildingRenderer } from './render/buildings';
 import { CarRenderer } from './render/cars';
 import { GameRenderer } from './render/renderer';
 import { RoadRenderer } from './render/roads';
-import { Game } from './sim/game';
+import { CONFIG, Game } from './sim/game';
 import { generateMap } from './sim/mapgen';
 import { GameOverScreen } from './ui/gameOver';
+import { Hud } from './ui/hud';
+import { UpgradePicker } from './ui/upgradePicker';
 import { Toolbar } from './ui/toolbar';
+import { Tutorial } from './ui/tutorial';
 
 /** Fixed simulation step; rendering interpolates nothing yet, cars just move in small steps. */
 const SIM_DT = 1 / 60;
@@ -21,13 +24,13 @@ const carRenderer = new CarRenderer(renderer.scene);
 const toolbar = new Toolbar(document.body);
 const gameOver = new GameOverScreen(document.body, () => newGame(seed), () => newGame(Math.floor(Math.random() * 1e6)));
 
-const hud = document.createElement('div');
-hud.className = 'hud';
-document.body.appendChild(hud);
+const hud = new Hud(document.body, (s) => setSpeed(s));
+const tutorial = new Tutorial(document.body);
+const picker = new UpgradePicker(document.body, (i) => game.chooseUpgrade(i));
 const hint = document.createElement('div');
 hint.className = 'hint';
 hint.textContent =
-  'drag road · right-drag erase · scroll zoom · middle/space-drag pan · P pause · 1/2/3 speed · O sandbox · R new map · G grow · T/B/N +roads/bridge/tunnel';
+  'drag road · right-drag erase · scroll zoom · middle/space-drag pan · P pause · 1/2 speed · H tutorial · O sandbox · R new map · G grow · T/B/N +roads/bridge/tunnel';
 document.body.appendChild(hint);
 
 const params = new URLSearchParams(location.search);
@@ -38,13 +41,16 @@ let paused = false;
 let drawnRoads = -1;
 let drawnBuildings = -1;
 let shownOver = false;
+let shownStage = 0;
 
 function newGame(newSeed: number) {
   seed = newSeed;
   game = new Game(generateMap(seed));
   drawnRoads = drawnBuildings = -1;
   shownOver = false;
+  shownStage = 0;
   gameOver.hide();
+  picker.hide();
   buildingRenderer.clear();
   renderer.setMap(game.map);
   renderer.resize();
@@ -52,11 +58,17 @@ function newGame(newSeed: number) {
   history.replaceState(null, '', `?seed=${seed}`);
 }
 
+function setSpeed(s: number) {
+  if (s === 0) paused = !paused;
+  else {
+    speed = s;
+    paused = false;
+  }
+}
+
 function updateHud() {
-  const mins = Math.floor(game.time / 60), secs = Math.floor(game.time % 60).toString().padStart(2, '0');
-  const state = game.over ? 'game over' : paused ? 'paused' : `${speed}x`;
-  hud.innerHTML = `<span class="title">${game.score}</span>
-    <span class="meta">${mins}:${secs} · ${state}${game.sandbox ? ' · sandbox' : ''} · seed ${seed} · stage ${game.stage + 1}/${game.map.stages.length}</span>`;
+  hud.update(game.score, game.week + 1, game.weekProgress, paused ? 0 : speed, game.sandbox);
+  hint.dataset.meta = `seed ${seed} · stage ${game.stage + 1}/${game.map.stages.length}`;
 }
 
 const camera = new CameraControls(
@@ -71,14 +83,16 @@ new RoadTool(renderer, roadRenderer, () => game.net, () => camera.isPanning, (i)
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'r') newGame(Math.floor(Math.random() * 1e6));
-  if (e.key === 'g' && game.grow()) renderer.setBounds(game.bounds);
+  if (e.key === 'g') game.grow();
   if (e.key === 'f') renderer.setBounds(game.bounds);
-  if (e.key === 'p') paused = !paused;
-  if (e.key === 'o') game.sandbox = !game.sandbox;
-  if (['1', '2', '3'].includes(e.key)) {
-    speed = Number(e.key);
-    paused = false;
+  if (picker.visible && ['1', '2'].includes(e.key)) {
+    picker.pick(Number(e.key) - 1);
+    return;
   }
+  if (e.key === 'p') setSpeed(0);
+  if (e.key === 'h') tutorial.start(true);
+  if (e.key === 'o') game.sandbox = !game.sandbox;
+  if (['1', '2'].includes(e.key)) setSpeed(Number(e.key));
   // Dev shortcuts until weekly upgrades exist.
   if (e.key === 't') game.net.inventory.roads += 10;
   if (e.key === 'b') game.net.inventory.bridges += 1;
@@ -92,6 +106,7 @@ window.addEventListener('resize', () => {
 });
 
 newGame(seed);
+tutorial.start();
 
 if (import.meta.env.DEV) {
   // Debug handle for poking at the game from the browser console.
@@ -131,6 +146,11 @@ renderer.renderer.setAnimationLoop((now) => {
     drawnBuildings = game.buildings.version;
     buildingRenderer.sync(game.buildings);
   }
+  if (game.stage !== shownStage) {
+    shownStage = game.stage;
+    renderer.setBounds(game.bounds);
+  }
+  if (game.upgrades && !picker.visible) picker.show(game.week, CONFIG.weeklyRoads, game.upgrades);
   buildingRenderer.updateWarnings(game.buildings.dests, now / 1000);
   if (game.over && !shownOver) {
     shownOver = true;
@@ -139,6 +159,7 @@ renderer.renderer.setAnimationLoop((now) => {
     Object.assign(renderer.viewTarget, { x: d.x + 1, z: d.y + 1 + height * 0.26, height });
     gameOver.show(game.score, game.over.time);
   }
+  tutorial.update(game);
   carRenderer.update(game);
   updateHud();
   renderer.update(dt);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Game } from './game';
+import { CONFIG, Game } from './game';
 import { generateMap } from './mapgen';
 
 /** Auto-builds roads from every house to a same-color destination, like a lazy player. */
@@ -43,8 +43,10 @@ describe('Traffic', () => {
       // Once the city has grown, fast-forward the clock to crank up pin demand.
       if (!jumped && game.time > 220) {
         game.time = 2400;
+        game.week = Math.floor(game.time / CONFIG.weekSeconds);
         jumped = true;
       }
+      if (game.upgrades) game.chooseUpgrade(0);
       game.update(1 / 60);
       if (step % 3600 === 0) scoreAtMinute.push(game.score);
     }
