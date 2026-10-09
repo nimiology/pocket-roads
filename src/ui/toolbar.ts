@@ -11,11 +11,13 @@ export const ICONS: Record<keyof Inventory, string> = {
 };
 
 /** Tools picked from the toolbar; everything else is passive inventory. */
-export type ToolKind = 'road' | 'roundabouts' | 'lights' | 'motorways';
+export type ToolKind = 'road' | 'erase' | 'roundabouts' | 'lights' | 'motorways';
+
+const ERASER = `<svg viewBox="0 0 24 24"><path d="M14.5 3.5 L20.5 9.5 L11 19 H6.5 L3.5 16 Z" fill="#e5483a"/><path d="M3.5 16 L8.5 11 L14.5 17 L12.5 19 H6.5 Z" fill="#f2ede0"/><rect x="11" y="18.6" width="10" height="1.6" rx="0.8" fill="#5d6169"/></svg>`;
 
 const PICKABLE: ToolKind[] = ['roundabouts', 'lights', 'motorways'];
 const LABELS: Record<keyof Inventory, string> = {
-  roads: 'Road tiles', bridges: 'Bridges', tunnels: 'Tunnels',
+  roads: 'Road tiles', bridges: 'Bridges (drag a road straight across water)', tunnels: 'Tunnels (drag a road straight through a hill)',
   roundabouts: 'Roundabout (click a junction)', lights: 'Traffic light (click a junction)', motorways: 'Motorway (drag between two roads)',
 };
 
@@ -27,6 +29,7 @@ export class Toolbar {
   private el: HTMLDivElement;
   private items = {} as Record<keyof Inventory, HTMLDivElement>;
   selected: ToolKind = 'road';
+  private eraser: HTMLDivElement;
 
   constructor(parent: HTMLElement) {
     this.el = document.createElement('div');
@@ -43,12 +46,20 @@ export class Toolbar {
       this.el.appendChild(item);
       this.items[key] = item;
     }
+    // Erasing is right-drag with a mouse; touch screens need it as a tool.
+    this.eraser = document.createElement('div');
+    this.eraser.className = 'tool pickable eraser';
+    this.eraser.title = 'Eraser (drag over roads, tap a tool to remove it)';
+    this.eraser.innerHTML = ERASER;
+    this.eraser.addEventListener('click', () => this.select(this.selected === 'erase' ? 'road' : 'erase'));
+    this.el.appendChild(this.eraser);
     parent.appendChild(this.el);
   }
 
   select(tool: ToolKind): void {
     this.selected = tool;
     for (const key of PICKABLE) this.items[key as keyof Inventory].classList.toggle('selected', key === tool);
+    this.eraser.classList.toggle('selected', tool === 'erase');
     document.body.classList.toggle('placing', tool !== 'road');
   }
 
@@ -60,6 +71,6 @@ export class Toolbar {
       // Special tools only show up once the player has been given one.
       item.hidden = (PICKABLE as string[]).includes(key) && owned[key] <= 0;
     }
-    if (this.selected !== 'road' && available[this.selected as keyof Inventory] <= 0) this.select('road');
+    if (this.selected !== 'road' && this.selected !== 'erase' && available[this.selected as keyof Inventory] <= 0) this.select('road');
   }
 }

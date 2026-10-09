@@ -2,7 +2,8 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #e9e3d5; }
 body { font-family: ui-rounded, 'SF Pro Rounded', system-ui, sans-serif; color: #4a4740; user-select: none; }
 #app { position: fixed; inset: 0; }
-#app canvas { display: block; }
+#app canvas { display: block; touch-action: none; }
+html, body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
 
 .hud {
   position: fixed; top: 14px; left: 16px; z-index: 1; pointer-events: none;
@@ -156,3 +157,24 @@ body.in-menu .hud, body.in-menu .hud-right, body.in-menu .toolbar, body.in-menu 
 .update-notice button { font: inherit; border: none; border-radius: 9px; cursor: pointer; }
 .update-notice .reload { padding: 6px 12px; background: #faf7f0; color: #3d3a35; }
 .update-notice .later { padding: 6px 8px; background: none; color: #faf7f0; opacity: 0.6; }
+
+.tool.eraser { padding: 4px 6px; }
+
+/* Phones: keep clear of notches and the home bar, and give fingers bigger targets. */
+@media (max-width: 640px), (pointer: coarse) {
+  .hud { top: calc(10px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); }
+  .hud-right { top: calc(8px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); }
+  .hud-right button { width: 38px; height: 34px; }
+  .toolbar {
+    bottom: calc(14px + env(safe-area-inset-bottom)); max-width: calc(100vw - 16px);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .tool { padding: 6px 8px 6px 6px; flex: none; }
+  .tool svg { width: 26px; height: 26px; }
+  .hint { display: none; }
+}
+@media (max-width: 420px) {
+  .hud .score { font-size: 22px; }
+  .tool span { font-size: 14px; }
+  .toolbar { gap: 2px; padding: 4px 6px; }
+}

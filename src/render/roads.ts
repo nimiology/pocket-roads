@@ -40,6 +40,9 @@ const arch = new THREE.CylinderGeometry(0.5, 0.5, 1, 16, 1, false, 0, Math.PI);
 
 type Piece = { geo: THREE.BufferGeometry; color: string; shadow?: boolean; mat?: THREE.Material; matrices: THREE.Matrix4[] };
 
+/** Dashed tunnel route: always drawn on top, so the whole tunnel reads even where the hill is tall. */
+const TUNNEL_DASH = new THREE.MeshBasicMaterial({ color: '#3b3a38', transparent: true, opacity: 0.7, depthTest: false, depthWrite: false });
+
 /** Motorway look: translucent amber glass with a glossy clear coat, gold rails, frosted pillars. */
 const GLASS_DECK = new THREE.MeshPhysicalMaterial({
   color: '#e9b545', emissive: '#a86a00', emissiveIntensity: 0.12, metalness: 0.1, roughness: 0.45,
@@ -142,6 +145,15 @@ export class RoadRenderer {
     const pillars: Piece = { geo: box, color: PALETTE.pillar, mat: GLASS_PILLAR, matrices: [] };
     const stripes: Piece = { geo: box, color: PALETTE.parkingLine, matrices: [] };
     const poles: Piece = { geo: box, color: PALETTE.bridgeRail, matrices: [] };
+    // The road inside a tunnel is hidden by the hill, so trace its route over the top in dashes.
+    const tunnelDashes: Piece = { geo: box, color: PALETTE.tunnel, mat: TUNNEL_DASH, matrices: [] };
+    const dashes = (a: THREE.Vector3, b: THREE.Vector3) => {
+      const len = a.distanceTo(b);
+      for (let d = 0.04; d < len - 0.04; d += 0.24) {
+        const e = Math.min(len - 0.04, d + 0.13);
+        tunnelDashes.matrices.push(segment(a.clone().lerp(b, d / len), a.clone().lerp(b, e / len), 0.09, 0.4, 0.01));
+      }
+    };
 
     const terrain = (i: number) => net.terrainAt(i);
     const center = (i: number) => {
@@ -152,7 +164,10 @@ export class RoadRenderer {
     for (const [a, b] of net.edges()) {
       const ta = terrain(a), tb = terrain(b);
       const pa = center(a), pb = center(b);
-      if (ta === Terrain.Mountain && tb === Terrain.Mountain) continue; // inside the tunnel
+      if (ta === Terrain.Mountain && tb === Terrain.Mountain) {
+        dashes(pa, pb); // inside the tunnel
+        continue;
+      }
       if (ta === Terrain.Water || tb === Terrain.Water) {
         deck.matrices.push(segment(pa, pb, BRIDGE_W, ROAD_Y + 0.01, ROAD_H));
         for (const side of [-1, 1]) rails.matrices.push(segment(pa, pb, 0.05, ROAD_Y + 0.05, 0.07, side * (BRIDGE_W / 2 - 0.02)));
@@ -172,6 +187,7 @@ export class RoadRenderer {
           new THREE.Vector3(0.62, 0.16, 0.62),
         );
         portals.matrices.push(m);
+        dashes(land.clone().addScaledVector(dir, PORTAL_OFFSET + 0.2), mtn);
       }
     }
 
@@ -255,9 +271,11 @@ export class RoadRenderer {
       }
     }
 
-    for (const piece of [deck, rails, road, joints, portals, rounds, islands, pillars, stripes, poles]) {
+    for (const piece of [deck, rails, road, joints, portals, rounds, islands, pillars, stripes, poles, tunnelDashes]) {
       if (!piece.matrices.length) continue;
       const mesh = new THREE.InstancedMesh(piece.geo, piece.mat ?? new THREE.MeshLambertMaterial({ color: piece.color }), piece.matrices.length);
+      // Tunnel dashes draw over the hill in front of them.
+      if (piece === tunnelDashes) mesh.renderOrder = 2;
       piece.matrices.forEach((m, k) => mesh.setMatrixAt(k, m));
       mesh.receiveShadow = true;
       mesh.castShadow = !!piece.shadow;

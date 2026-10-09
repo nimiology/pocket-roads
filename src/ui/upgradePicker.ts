@@ -33,9 +33,9 @@ export class UpgradePicker {
       const b = document.createElement('button');
       b.className = 'choice';
       // Special tool first and large; bundled roads underneath.
-      const keys = (Object.keys(u) as (keyof Inventory)[]).sort((a) => (a === 'roads' ? 1 : -1));
+      const keys = (Object.keys(u) as (keyof Inventory)[]).sort((a, b) => Number(a === 'roads') - Number(b === 'roads'));
       b.innerHTML = keys.map((k, j) =>
-        `<div class="${j === 0 ? 'main' : 'extra'}">${ICONS[k]}<span>${k !== 'roads' ? NAMES[k] : j === 0 ? `+${u[k]} roads` : `+${u[k]}`}</span></div>`,
+        `<div class="${j === 0 ? 'main' : 'extra'}">${ICONS[k]}<span>+${u[k]} ${k === 'roads' ? 'roads' : NAMES[k]}</span></div>`,
       ).join('');
       b.title = `${i + 1}`;
       b.addEventListener('click', () => this.pick(i));

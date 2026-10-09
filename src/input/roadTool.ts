@@ -48,6 +48,16 @@ export class RoadTool {
     el.addEventListener('pointermove', this.onMove);
     el.addEventListener('pointerleave', () => this.roads.setHover(0, 0, null));
     window.addEventListener('pointerup', this.onUp);
+    window.addEventListener('pointercancel', () => this.cancel());
+  }
+
+  /** Abandon the current stroke (a second finger turned it into a pan or pinch). */
+  private cancel() {
+    if (this.mode === 'draw') this.getNet().pruneDanglingSpans();
+    if (this.mode === 'motorway') this.roads.setMotorwayPreview(null);
+    this.mode = null;
+    this.fromHouse = null;
+    this.roads.setHover(0, 0, null);
   }
 
   private tileAt(e: PointerEvent): { x: number; y: number; px: number; py: number } | null {
@@ -57,12 +67,13 @@ export class RoadTool {
   }
 
   private onDown = (e: PointerEvent) => {
-    if (this.isPanning() || (e.button !== 0 && e.button !== 2)) return;
+    if (this.isPanning()) return this.cancel();
+    if (!e.isPrimary || (e.button !== 0 && e.button !== 2)) return;
     const t = this.tileAt(e);
     const net = this.getNet();
     if (!t || !net.grid.contains(t.x, t.y)) return;
     const tile = net.idx(t.x, t.y);
-    if (e.button === 2) {
+    if (e.button === 2 || this.hooks.tool() === 'erase') {
       this.mode = 'erase';
       // A click on a tool takes the tool away and leaves the road under it.
       if (net.specialAt(tile)) net.closeSpecial(tile);
@@ -106,6 +117,8 @@ export class RoadTool {
   }
 
   private onMove = (e: PointerEvent) => {
+    if (!e.isPrimary) return;
+    if (this.mode && this.isPanning()) return this.cancel();
     const t = this.tileAt(e);
     const net = this.getNet();
     if (t && this.mode === 'erase' && net.grid.contains(t.x, t.y)) {
@@ -132,6 +145,9 @@ export class RoadTool {
   }
 
   private onUp = (e: PointerEvent) => {
+    if (!e.isPrimary) return;
+    // No cursor stays behind after a finger lifts.
+    if (e.pointerType === 'touch') this.roads.setHover(0, 0, null);
     const net = this.getNet();
     if (this.mode === 'draw') net.pruneDanglingSpans();
     if (this.mode === 'motorway') {
@@ -158,8 +174,23 @@ export class RoadTool {
       if (ax <= 0.5 && ay <= 0.5) return;
       // Step along an axis when the cursor leaves through that side; step diagonally when it
       // leaves near a corner (or is far away in both axes).
-      const sx = ax > 0.5 || (ay > 0.5 && ax > DIAGONAL_SLACK) ? Math.sign(dx) : 0;
-      const sy = ay > 0.5 || (ax > 0.5 && ay > DIAGONAL_SLACK) ? Math.sign(dy) : 0;
+      let sx = ax > 0.5 || (ay > 0.5 && ax > DIAGONAL_SLACK) ? Math.sign(dx) : 0;
+      let sy = ay > 0.5 || (ax > 0.5 && ay > DIAGONAL_SLACK) ? Math.sign(dy) : 0;
+      // Bridges and tunnels must be straight. Inside one, keep going the way it started as long as
+      // the cursor is still ahead; stepping onto one, aim at the cursor in 8 directions, so a
+      // slightly wobbly diagonal drag still builds a clean diagonal crossing.
+      const back = net.isSpanTile(this.current) ? [...net.neighbors(this.current)] : [];
+      if (back.length === 1) {
+        const [bx, by] = net.xy(back[0]);
+        sx = cx - bx;
+        sy = cy - by;
+        if (sx * dx + sy * dy <= 0) return;
+      } else {
+        const oct = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
+        const ox = Math.round(Math.cos(oct * Math.PI / 4)), oy = Math.round(Math.sin(oct * Math.PI / 4));
+        const span = (x: number, y: number) => net.grid.contains(x, y) && net.isSpanTile(net.idx(x, y));
+        if (span(cx + sx, cy + sy) || span(cx + ox, cy + oy)) [sx, sy] = [ox, oy];
+      }
       const nx = cx + sx, ny = cy + sy;
       if (!net.grid.contains(nx, ny)) return;
       const next = net.idx(nx, ny);

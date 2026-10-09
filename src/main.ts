@@ -81,6 +81,11 @@ document.addEventListener('click', (e) => {
   if ((e.target as HTMLElement).closest('button, .tool.pickable')) sound.click();
 });
 watchForUpdates(document.body);
+
+// Installable and playable offline (production builds only; dev uses Vite's own server).
+if (!import.meta.env.DEV && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {}));
+}
 const hint = document.createElement('div');
 hint.className = 'hint';
 hint.textContent =
