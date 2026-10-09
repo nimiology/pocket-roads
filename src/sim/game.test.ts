@@ -3,6 +3,7 @@ import { HOUSE_CARS } from './buildings';
 import { Game } from './game';
 import { Grid } from './grid';
 import { MapData } from './mapgen';
+import { MIN_GAP } from './traffic';
 
 function flatMap(seed = 1): MapData {
   return { seed, grid: new Grid(30, 20), stages: [{ x0: 0, y0: 0, x1: 30, y1: 20 }] };
@@ -85,4 +86,61 @@ describe('Game', () => {
     expect(game.buildings.houses.length).toBeGreaterThan(10);
     expect(game.colorsInPlay).toBeGreaterThan(1);
   });
+
+  it('keeps traffic rules on a busy network', () => {
+    const game = new Game(flatMap(11));
+    game.net.inventory.roads = 2000;
+    const linked = new Set<number>();
+    let maxCars = 0;
+    run(game, 400, () => {
+      for (const h of game.buildings.houses) {
+        if (linked.has(h.id)) continue;
+        const d = game.buildings.dests.find((x) => x.color === h.color)!;
+        connect(game, h.access, d.access);
+        linked.add(h.id);
+      }
+      for (const d of game.buildings.dests) if (!linked.has(d.id)) {
+        const h = game.buildings.houses.find((x) => x.color === d.color);
+        if (h) connect(game, h.access, d.access);
+        linked.add(d.id);
+      }
+      checkInvariants(game);
+      checkTraffic(game);
+      maxCars = Math.max(maxCars, game.cars.length);
+    });
+    expect(maxCars).toBeGreaterThan(8);
+    expect(game.score).toBeGreaterThan(40);
+  });
 });
+
+function checkTraffic(game: Game) {
+  // Cars sharing a lane keep their spacing (cars still waiting inside a house are exempt).
+  const lanes = new Map<string, number[]>();
+  for (const c of game.cars) {
+    if (c.state === 'parked' || (c.seg === 0 && c.t === 0)) continue;
+    const k = `${c.path[c.seg]}>${c.path[c.seg + 1]}`;
+    lanes.set(k, [...(lanes.get(k) ?? []), c.t]);
+  }
+  for (const ts of lanes.values()) {
+    ts.sort((a, b) => a - b);
+    for (let i = 1; i < ts.length; i++) expect(ts[i] - ts[i - 1]).toBeGreaterThanOrEqual(MIN_GAP - 1e-6);
+  }
+  // Each junction lets one movement through at a time.
+  const movements = new Map<number, Set<string>>();
+  for (const c of game.cars) {
+    for (const node of c.locks) {
+      const i = c.path.indexOf(node);
+      const set = movements.get(node) ?? new Set<string>();
+      set.add(`${c.path[i - 1]}>${c.path[i + 1]}`);
+      movements.set(node, set);
+    }
+  }
+  for (const set of movements.values()) expect(set.size).toBe(1);
+  // Parking spots are never double-booked, and every parked car holds one.
+  for (const d of game.buildings.dests) {
+    const held = d.spots.filter((x) => x !== null);
+    expect(new Set(held).size).toBe(held.length);
+  }
+  for (const c of game.cars) if (c.state === 'parked') expect(c.dest.spots[c.spot]).toBe(c.id);
+}
+

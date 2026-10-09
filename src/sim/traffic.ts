@@ -1,0 +1,229 @@
+import { Destination, House, PARKING_SPOTS } from './buildings';
+import { DriveGraph } from './pathfind';
+
+/** Centre-to-centre spacing between cars queued in one lane (car length is 0.4). */
+export const MIN_GAP = 0.5;
+/** Distance before a node's centre where cars wait for the junction or a parking spot. */
+export const STOP = 0.32;
+const ACCEL = 3;
+/** Cars only ask for a junction or spot once this close to the stop line, so queues keep their order. */
+const REQUEST_DIST = 0.1;
+/** After a car with another movement has waited this long, no more cars may tag along. */
+const PLATOON_PATIENCE = 1;
+
+export interface Car {
+  id: number;
+  house: House;
+  dest: Destination;
+  state: 'toDest' | 'parked' | 'toHome';
+  /** Route as tile indices; the car is between path[seg] and path[seg + 1]. */
+  path: number[];
+  seg: number;
+  /** Distance travelled along the current segment. */
+  t: number;
+  speed: number;
+  parkTimer: number;
+  /** Parking spot index held at `dest`, or -1. */
+  spot: number;
+  /** Junction nodes this car currently holds. */
+  locks: Set<number>;
+  /** Game time this car started waiting at a stop line, or Infinity. */
+  waitingSince: number;
+}
+
+interface Lock {
+  holders: Set<Car>;
+  /** "from>to" of the movement currently allowed through. */
+  movement: string;
+  /** When a car with a different movement first got turned away, or Infinity. */
+  contestedSince: number;
+}
+
+export interface TrafficHooks {
+  /** Car reached the last node of its path. */
+  arrive(car: Car): void;
+}
+
+/**
+ * Lane-based car movement: cars keep a gap to the car ahead in their lane,
+ * take turns through junctions (nodes with 3+ links), only enter a junction when
+ * their exit lane has room, and reserve a parking spot before turning in.
+ */
+export class Traffic {
+  private locks = new Map<number, Lock>();
+  /** Cars per directed edge, rebuilt each step. */
+  private lanes = new Map<number, Car[]>();
+
+  constructor(private graph: DriveGraph, private tileCount: number, private speed: number) {}
+
+  private laneKey(a: number, b: number) {
+    return a * this.tileCount + b;
+  }
+
+  carsOn(a: number, b: number): Car[] {
+    return this.lanes.get(this.laneKey(a, b)) ?? [];
+  }
+
+  isJunction(node: number): boolean {
+    return this.graph.neighbors(node).length >= 3;
+  }
+
+  step(cars: Car[], dt: number, now: number, hooks: TrafficHooks): void {
+    this.indexLanes(cars);
+    // Longest-waiting cars get first claim on junctions and spots.
+    const order = cars.filter((c) => c.state !== 'parked').sort((a, b) => a.waitingSince - b.waitingSince || a.id - b.id);
+    for (const car of order) this.advance(car, dt, now, hooks);
+  }
+
+  private indexLanes(cars: Car[]) {
+    this.lanes.clear();
+    for (const c of cars) {
+      if (c.state === 'parked' || c.seg >= c.path.length - 1) continue;
+      const k = this.laneKey(c.path[c.seg], c.path[c.seg + 1]);
+      const list = this.lanes.get(k);
+      if (list) list.push(c);
+      else this.lanes.set(k, [c]);
+    }
+  }
+
+  /** True when the lane a→b has space for a car entering at its start. */
+  laneHasRoom(a: number, b: number, except?: Car): boolean {
+    return this.carsOn(a, b).every((c) => c === except || c.t >= MIN_GAP);
+  }
+
+  /**
+   * True when a car crossing junction b can get fully out of it onto lane b→c, after
+   * `ahead` other cars already crossing toward that lane.
+   */
+  private canClearJunction(b: number, c: number, ahead: number): boolean {
+    const need = STOP + MIN_GAP * (ahead + 1);
+    return this.carsOn(b, c).every((o) => o.t >= need - 1e-9);
+  }
+
+  /** Free distance ahead of `car` before it would be too close to the next car. */
+  private gapAhead(car: Car): number {
+    const a = car.path[car.seg], b = car.path[car.seg + 1];
+    let best = Infinity;
+    for (const o of this.carsOn(a, b)) {
+      // Ties go to the lower id so two cars launched together don't block each other.
+      if (o !== car && (o.t > car.t || (o.t === car.t && o.id < car.id))) best = Math.min(best, o.t - car.t);
+    }
+    if (best === Infinity && car.seg + 2 < car.path.length) {
+      const len = this.graph.cost(a, b);
+      const c = car.path[car.seg + 2];
+      for (const o of this.carsOn(b, c)) best = Math.min(best, len - car.t + o.t);
+    }
+    return best - MIN_GAP;
+  }
+
+  private advance(car: Car, dt: number, now: number, hooks: TrafficHooks) {
+    const a = car.path[car.seg], b = car.path[car.seg + 1];
+    const len = this.graph.cost(a, b);
+    const last = car.seg + 1 === car.path.length - 1;
+    let allowed = this.gapAhead(car);
+
+    if (last) {
+      allowed = Math.min(allowed, len - car.t);
+    } else if (car.t <= len - STOP + 1e-9) {
+      // Before the stop line: may we continue through node b?
+      const toStop = len - STOP - car.t;
+      if (!(toStop <= REQUEST_DIST && this.clearToPass(car, now))) {
+        allowed = Math.min(allowed, toStop);
+        if (toStop < 0.05 && car.waitingSince === Infinity) car.waitingSince = now;
+      }
+    }
+
+    car.speed = Math.min(this.speed, car.speed + ACCEL * dt);
+    const move = Math.max(0, Math.min(car.speed * dt, allowed));
+    if (move < car.speed * dt) car.speed = move / dt;
+    car.t += move;
+
+    // Cross into following segments.
+    while (car.seg < car.path.length - 1) {
+      const segLen = this.graph.cost(car.path[car.seg], car.path[car.seg + 1]);
+      if (car.t < segLen - 1e-9) break;
+      if (car.seg + 1 === car.path.length - 1) {
+        car.t = segLen;
+        hooks.arrive(car);
+        return;
+      }
+      car.t -= segLen;
+      car.seg++;
+    }
+    this.releasePassed(car);
+  }
+
+  /**
+   * Junction and parking checks for the node ahead. Grants the junction lock (and
+   * parking spot) when available; otherwise the car must wait at the stop line.
+   */
+  private clearToPass(car: Car, now: number): boolean {
+    const a = car.path[car.seg], b = car.path[car.seg + 1], c = car.path[car.seg + 2];
+    const intoParking = car.state === 'toDest' && car.seg + 2 === car.path.length - 1 && c === car.dest.door;
+    if (intoParking && car.spot < 0 && freeSpot(car.dest) < 0) return false;
+
+    if (this.isJunction(b) && !car.locks.has(b)) {
+      const lock = this.locks.get(b) ?? { holders: new Set<Car>(), movement: '', contestedSince: Infinity };
+      const mv = `${a}>${c}`;
+      const free = lock.holders.size === 0;
+      // Don't block the box: enter only if we can get all the way out onto the exit lane.
+      if (!intoParking && !this.canClearJunction(b, c, lock.holders.size)) return false;
+      this.locks.set(b, lock);
+      const tagAlong = !free && lock.movement === mv && now - lock.contestedSince < PLATOON_PATIENCE;
+      if (!free && !tagAlong) {
+        if (lock.movement !== mv && lock.contestedSince === Infinity) lock.contestedSince = now;
+        return false;
+      }
+      if (free) {
+        lock.movement = mv;
+        lock.contestedSince = Infinity;
+      }
+      lock.holders.add(car);
+      car.locks.add(b);
+    }
+
+    if (intoParking && car.spot < 0) {
+      car.spot = freeSpot(car.dest);
+      car.dest.spots[car.spot] = car.id;
+    }
+    car.waitingSince = Infinity;
+    return true;
+  }
+
+  /** Drop junction locks the car has driven clear of. */
+  private releasePassed(car: Car) {
+    for (const node of car.locks) {
+      const stillNear =
+        (car.path[car.seg + 1] === node) || (car.path[car.seg] === node && car.t < STOP);
+      if (!stillNear) this.release(car, node);
+    }
+  }
+
+  private release(car: Car, node: number) {
+    car.locks.delete(node);
+    const lock = this.locks.get(node);
+    if (!lock) return;
+    lock.holders.delete(car);
+    if (lock.holders.size === 0) this.locks.delete(node);
+  }
+
+  releaseLocks(car: Car): void {
+    for (const node of [...car.locks]) this.release(car, node);
+  }
+
+  /** Forget everything a car holds (it vanished, or its route was replaced). */
+  releaseAll(car: Car): void {
+    this.releaseLocks(car);
+    this.releaseSpot(car);
+  }
+
+  releaseSpot(car: Car): void {
+    if (car.spot >= 0 && car.dest.spots[car.spot] === car.id) car.dest.spots[car.spot] = null;
+    car.spot = -1;
+  }
+}
+
+export function freeSpot(d: Destination): number {
+  for (let i = 0; i < PARKING_SPOTS; i++) if (d.spots[i] === null) return i;
+  return -1;
+}

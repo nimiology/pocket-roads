@@ -62,7 +62,7 @@ export function carPose(car: Car, gridW: number): CarPose {
   if (car.state === 'parked') {
     const d = car.dest;
     const { parking } = destTiles(d.x, d.y, d.side);
-    const tile = parking[car.spot >> 1];
+    const tile = parking[Math.max(0, car.spot) >> 1];
     const along = [-d.side[1], d.side[0]];
     const s = (car.spot & 1 ? 0.22 : -0.22);
     return {
@@ -71,13 +71,47 @@ export function carPose(car: Car, gridW: number): CarPose {
       heading: Math.atan2(-d.side[1], -d.side[0]),
     };
   }
-  const a = center(car.path[car.seg]);
-  const b = center(car.path[Math.min(car.seg + 1, car.path.length - 1)]);
+  const { path, seg, t } = car;
+  const node = (k: number) => center(path[Math.max(0, Math.min(path.length - 1, k))]);
+  const len = segLen(node(seg), node(seg + 1));
+  // Round the corner through a node: blend from the end of the incoming lane to the
+  // start of the outgoing lane along a quadratic curve, except at the route's endpoints.
+  if (t > len - TURN_R && seg + 2 < path.length) {
+    return corner(node(seg), node(seg + 1), node(seg + 2), (t - (len - TURN_R)) / (2 * TURN_R));
+  }
+  if (t < TURN_R && seg > 0) {
+    return corner(node(seg - 1), node(seg), node(seg + 1), 0.5 + t / (2 * TURN_R));
+  }
+  return lanePoint(node(seg), node(seg + 1), t);
+}
+
+const TURN_R = 0.3;
+
+function segLen(a: number[], b: number[]) {
+  return Math.hypot(b[0] - a[0], b[1] - a[1]);
+}
+
+/** Point `t` along the right-hand lane from a to b. */
+function lanePoint(a: number[], b: number[], t: number): CarPose {
   const dx = b[0] - a[0], dz = b[1] - a[1];
   const len = Math.hypot(dx, dz) || 1;
-  const f = Math.min(1, car.t / len);
-  const heading = Math.atan2(dz, dx);
-  // Right-hand side of travel direction (dx, dz) on a screen where +z points down is (-dz, dx).
-  const ox = (-dz / len) * LANE_OFFSET, oz = (dx / len) * LANE_OFFSET;
-  return { x: a[0] + dx * f + ox, z: a[1] + dz * f + oz, heading };
+  const ux = dx / len, uz = dz / len;
+  // Right-hand side of travel direction (ux, uz) on a screen where +z points down is (-uz, ux).
+  return { x: a[0] + ux * t - uz * LANE_OFFSET, z: a[1] + uz * t + ux * LANE_OFFSET, heading: Math.atan2(uz, ux) };
+}
+
+/** Curve through node b from lane a→b into lane b→c; s in [0, 1]. */
+function corner(a: number[], b: number[], c: number[], s: number): CarPose {
+  const inLen = segLen(a, b);
+  const p0 = lanePoint(a, b, inLen - TURN_R);
+  const p2 = lanePoint(b, c, TURN_R);
+  const pIn = lanePoint(a, b, inLen), pOut = lanePoint(b, c, 0);
+  // Control point: where the two lane centrelines meet near the node.
+  const cx = (pIn.x + pOut.x) / 2, cz = (pIn.z + pOut.z) / 2;
+  const u = 1 - s;
+  const x = u * u * p0.x + 2 * u * s * cx + s * s * p2.x;
+  const z = u * u * p0.z + 2 * u * s * cz + s * s * p2.z;
+  const tx = 2 * u * (cx - p0.x) + 2 * s * (p2.x - cx);
+  const tz = 2 * u * (cz - p0.z) + 2 * s * (p2.z - cz);
+  return { x, z, heading: Math.atan2(tz, tx) };
 }

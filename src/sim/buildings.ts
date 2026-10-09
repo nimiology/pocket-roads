@@ -40,6 +40,8 @@ export interface Destination {
   pins: number;
   /** Cars currently on their way to collect a pin here. */
   assigned: number;
+  /** Id of the car holding each parking spot, or null. */
+  spots: (number | null)[];
   pinTimer: number;
   spawnedAt: number;
 }
@@ -118,7 +120,7 @@ export class Buildings {
       parkingTiles: tiles.parking.map(([tx, ty]) => this.idx(tx, ty)),
       door,
       access: this.idx(tiles.parking[0][0] + side[0], tiles.parking[0][1] + side[1]),
-      pins: 0, assigned: 0, pinTimer: 0, spawnedAt: now,
+      pins: 0, assigned: 0, spots: Array(PARKING_SPOTS).fill(null), pinTimer: 0, spawnedAt: now,
     };
     this.dests.push(d);
     this.register(d, [...d.buildingTiles, ...d.parkingTiles]);

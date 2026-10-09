@@ -1,9 +1,12 @@
-import { Buildings, CAPACITY, DIRS4, Destination, Dir, House, PARKING_SPOTS, destTiles } from './buildings';
+import { Buildings, CAPACITY, DIRS4, Destination, Dir, House, destTiles } from './buildings';
 import { Bounds, Terrain, inBounds } from './grid';
 import { MapData } from './mapgen';
 import { DriveGraph } from './pathfind';
 import { Rng, mulberry32 } from './rng';
 import { Inventory, RoadNetwork } from './roads';
+import { Car, Traffic } from './traffic';
+
+export type { Car } from './traffic';
 
 export const COLOR_COUNT = 6;
 
@@ -21,24 +24,11 @@ export const CONFIG = {
   startingInventory: { roads: 30, bridges: 1, tunnels: 1 } as Inventory,
 };
 
-export interface Car {
-  id: number;
-  house: House;
-  dest: Destination;
-  state: 'toDest' | 'parked' | 'toHome';
-  /** Route as tile indices; the car is between path[seg] and path[seg + 1]. */
-  path: number[];
-  seg: number;
-  /** Distance travelled along the current segment. */
-  t: number;
-  parkTimer: number;
-  spot: number;
-}
-
 export class Game {
   readonly net: RoadNetwork;
   readonly buildings: Buildings;
   readonly graph: DriveGraph;
+  readonly traffic: Traffic;
   readonly cars: Car[] = [];
   time = 0;
   score = 0;
@@ -60,6 +50,7 @@ export class Game {
       inBounds(this.bounds, x, y) && !this.buildings.isOccupied(this.net.idx(x, y)),
     );
     this.graph = new DriveGraph(this.net, this.buildings);
+    this.traffic = new Traffic(this.graph, map.grid.w * map.grid.h, CONFIG.carSpeed);
     this.seenNetVersion = this.net.version;
     this.region = landRegions(map);
     this.spawnNewColor();
@@ -229,7 +220,10 @@ export class Game {
   private launch(h: House, d: Destination, path: number[]) {
     h.idleCars--;
     d.assigned++;
-    this.cars.push({ id: this.nextCarId++, house: h, dest: d, state: 'toDest', path: [...path], seg: 0, t: 0, parkTimer: 0, spot: 0 });
+    this.cars.push({
+      id: this.nextCarId++, house: h, dest: d, state: 'toDest', path: [...path], seg: 0, t: 0, speed: 0,
+      parkTimer: 0, spot: -1, locks: new Set(), waitingSince: Infinity,
+    });
   }
 
   // ---- movement -------------------------------------------------------------
@@ -237,27 +231,13 @@ export class Game {
   private moveCars(dt: number) {
     const done: Car[] = [];
     for (const car of this.cars) {
-      if (car.state === 'parked') {
-        car.parkTimer -= dt;
-        if (car.parkTimer <= 0) this.leaveParking(car, done);
-        continue;
-      }
-      let move = CONFIG.carSpeed * dt;
-      while (move > 0) {
-        if (car.seg >= car.path.length - 1) {
-          this.arrive(car, done);
-          break;
-        }
-        const len = this.graph.cost(car.path[car.seg], car.path[car.seg + 1]);
-        const step = Math.min(move, len - car.t);
-        car.t += step;
-        move -= step;
-        if (car.t >= len - 1e-9) {
-          car.seg++;
-          car.t = 0;
-        }
-      }
+      if (car.state !== 'parked') continue;
+      car.parkTimer -= dt;
+      if (car.parkTimer <= 0) this.leaveParking(car, done);
     }
+    this.traffic.step(this.cars, dt, this.time, {
+      arrive: (car) => this.arrive(car, done),
+    });
     if (done.length) this.removeCars(done);
   }
 
@@ -265,9 +245,16 @@ export class Game {
     if (car.state === 'toDest') {
       car.state = 'parked';
       car.parkTimer = CONFIG.parkSeconds;
-      const taken = new Set(this.cars.filter((c) => c.state === 'parked' && c.dest === car.dest && c !== car).map((c) => c.spot));
-      car.spot = [...Array(PARKING_SPOTS).keys()].find((s) => !taken.has(s)) ?? 0;
+      car.speed = 0;
+      this.traffic.releaseLocks(car);
+      if (car.spot < 0) {
+        // Arrived without a reservation (e.g. route replaced right at the door): squeeze in.
+        const free = car.dest.spots.indexOf(null);
+        car.spot = free >= 0 ? free : 0;
+        car.dest.spots[car.spot] = car.id;
+      }
     } else {
+      this.traffic.releaseAll(car);
       car.house.idleCars++;
       done.push(car);
     }
@@ -275,19 +262,22 @@ export class Game {
 
   private leaveParking(car: Car, done: Car[]) {
     const d = car.dest;
+    const home = this.graph.path(d.door, car.house.tile);
+    // Wait in the spot until the exit lane has room.
+    if (home && home.length > 1 && !this.traffic.laneHasRoom(home[0], home[1])) return;
     if (d.pins > 0) {
       d.pins--;
       this.score++;
     }
     d.assigned--;
     this.buildings.version++;
-    const home = this.graph.path(d.door, car.house.tile);
+    this.traffic.releaseSpot(car);
     if (!home) {
       car.house.idleCars++;
       done.push(car);
       return;
     }
-    Object.assign(car, { state: 'toHome', path: home, seg: 0, t: 0 });
+    Object.assign(car, { state: 'toHome', path: home, seg: 0, t: 0, speed: 0 });
   }
 
   /** After a road edit, re-plan every moving car from the tile it's heading to. */
@@ -307,6 +297,7 @@ export class Game {
         // Destination cut off: give up the trip and head home instead.
         car.dest.assigned--;
         car.state = 'toHome';
+        this.traffic.releaseSpot(car);
         rest = this.graph.path(b, car.house.tile);
       }
       if (!rest) {
@@ -317,6 +308,7 @@ export class Game {
       car.seg = 0;
     }
     for (const car of lost) {
+      this.traffic.releaseAll(car);
       if (car.state === 'toDest') car.dest.assigned--;
       car.house.idleCars++;
     }
